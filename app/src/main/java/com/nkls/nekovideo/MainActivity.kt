@@ -199,6 +199,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        DebugCrashLogger.install(this)
         super.onCreate(savedInstanceState)
 
         themeManager = ThemeManager(this)
