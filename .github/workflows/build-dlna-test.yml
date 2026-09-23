@@ -24,6 +24,25 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
       - name: Make gradlew executable
         run: chmod +x gradlew
+      - name: Restore persistent debug keystore
+        id: debug_key
+        uses: actions/cache@v5
+        with:
+          path: ~/.android/debug.keystore
+          key: nekovideo-dlna-debug-keystore-v1
+      - name: Create debug keystore if missing
+        if: steps.debug_key.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
       - name: Build debug APK
         run: ./gradlew assembleDebug
       - name: Upload debug APK
