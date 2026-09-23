@@ -29,6 +29,7 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
 
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri
+        Log.d("LocalVideoServer", "HTTP ${session.method} $uri range=${session.headers["range"]} userAgent=${session.headers["user-agent"]} getContentFeatures=${session.headers["getcontentfeatures.dlna.org"]} transferMode=${session.headers["transfermode.dlna.org"]}")
 
         // Formato: /video/nome_do_arquivo.mp4
         if (uri.startsWith("/video/")) {
@@ -87,6 +88,9 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
                 response.addHeader("Content-Range", "bytes $start-$end/$fileSize")
                 response.addHeader("Accept-Ranges", "bytes")
                 response.addHeader("Content-Length", contentLength.toString())
+                response.addHeader("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000")
+                response.addHeader("transferMode.dlna.org", "Streaming")
+                Log.d("LocalVideoServer", "HTTP 206 $videoPath bytes=$start-$end/$fileSize mime=$mimeType")
 
                 return response
             } else {
@@ -106,6 +110,9 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
                     fileSize
                 )
                 response.addHeader("Accept-Ranges", "bytes")
+                response.addHeader("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000")
+                response.addHeader("transferMode.dlna.org", "Streaming")
+                Log.d("LocalVideoServer", "HTTP 200 $videoPath bytes=$fileSize mime=$mimeType")
                 return response
             }
 
