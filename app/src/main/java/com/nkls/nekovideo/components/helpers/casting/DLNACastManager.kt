@@ -2,6 +2,9 @@ package com.nkls.nekovideo.components.helpers
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.*
@@ -326,8 +329,88 @@ class DLNACastManager(private val context: Context) {
         return mimeTypeForVideoFileName(name)
     }
 
-    private fun buildDIDLMetadata(title: String, url: String, mimeType: String): String {
-        val didl = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="false"><dc:title>${title.escapeXml()}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:$mimeType:DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01500000000000000000000000000000">${url.escapeXml()}</res></item></DIDL-Lite>"""
+    private data class DlnaMediaInfo(
+        val size: Long? = null,
+        val durationMs: Long? = null,
+        val width: Int? = null,
+        val height: Int? = null,
+        val videoMime: String? = null,
+        val audioMime: String? = null
+    )
+
+    /**
+     * Read only container/track headers. The media is never transcoded or copied.
+     * If probing fails we keep the old, minimal DLNA metadata as a safe fallback.
+     */
+    private fun probeMedia(videoPath: String): DlnaMediaInfo {
+        if (videoPath.startsWith("locked://")) return DlnaMediaInfo()
+        val file = File(videoPath.removePrefix("file://"))
+        if (!file.isFile) return DlnaMediaInfo()
+
+        var durationMs: Long? = null
+        var width: Int? = null
+        var height: Int? = null
+        try {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(file.absolutePath)
+                durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Metadata retriever failed for ${file.name}: ${e.message}")
+        }
+
+        var videoMime: String? = null
+        var audioMime: String? = null
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(file.absolutePath)
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("video/") && videoMime == null) videoMime = mime
+                if (mime.startsWith("audio/") && audioMime == null) audioMime = mime
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "MediaExtractor failed for ${file.name}: ${e.message}")
+        } finally {
+            extractor.release()
+        }
+
+        return DlnaMediaInfo(file.length(), durationMs, width, height, videoMime, audioMime)
+    }
+
+    private fun formatDlnaDuration(durationMs: Long): String {
+        val totalSeconds = durationMs / 1000
+        val millis = durationMs % 1000
+        return "%d:%02d:%02d.%03d".format(
+            totalSeconds / 3600,
+            (totalSeconds % 3600) / 60,
+            totalSeconds % 60,
+            millis
+        )
+    }
+
+    private fun buildDIDLMetadata(
+        title: String,
+        url: String,
+        mimeType: String,
+        info: DlnaMediaInfo
+    ): String {
+        // OP=01 advertises byte-range support. 017... mirrors the richer Samsung-compatible
+        // form observed from BubbleUPnP while keeping profile-name advertising conservative:
+        // a wrong DLNA.ORG_PN is worse than omitting it.
+        val protocolInfo = "http-get:*:$mimeType:DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+        val attributes = buildString {
+            info.size?.takeIf { it > 0 }?.let { append(" size=\\\"$it\\\"") }
+            info.durationMs?.takeIf { it > 0 }?.let { append(" duration=\\\"${formatDlnaDuration(it)}\\\"") }
+            if (info.width != null && info.height != null && info.width!! > 0 && info.height!! > 0) {
+                append(" resolution=\\\"${info.width}x${info.height}\\\"")
+            }
+        }
+        Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} audio=${info.audioMime} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height}")
+        val didl = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="false"><dc:title>${title.escapeXml()}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="$protocolInfo"$attributes>${url.escapeXml()}</res></item></DIDL-Lite>"""
         return didl.escapeXml()
     }
 
@@ -341,7 +424,8 @@ class DLNACastManager(private val context: Context) {
             try {
                 val url = videoUrlFor(videoPath)
                 val mime = mimeTypeFor(videoPath)
-                val metadata = buildDIDLMetadata(videoTitle, url, mime)
+                val mediaInfo = probeMedia(videoPath)
+                val metadata = buildDIDLMetadata(videoTitle, url, mime, mediaInfo)
                 sendSoap(device.controlUrl, "SetAVTransportURI",
                     "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>")
                 delay(500)
