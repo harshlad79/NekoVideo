@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.wifi.WifiManager
 import android.util.Log
+import android.widget.Toast
 import com.nkls.nekovideo.DebugTraceLogger
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.*
@@ -40,6 +41,17 @@ class DLNACastManager(private val context: Context) {
         val controlUrl: String,
         val baseUrl: String
     )
+
+    private data class SoapResult(
+        val httpStatus: Int? = null,
+        val body: String? = null,
+        val errorCode: String? = null,
+        val errorDescription: String? = null,
+        val exceptionMessage: String? = null
+    ) {
+        val isSuccess: Boolean
+            get() = httpStatus != null && httpStatus in 200..299 && errorCode == null
+    }
 
     private var videoServer: LocalVideoServer? = null
     private var connectedDevice: DLNADevice? = null
@@ -236,28 +248,34 @@ class DLNACastManager(private val context: Context) {
     private fun startPolling() {
         scope.launch {
             var wasPlaying = false
+            var lastTransportState: String? = null
             while (isConnected) {
                 try {
                     val pos = getPositionInfo()
                     if (pos != null) {
                         currentPositionMs = pos.first
                         durationMs = pos.second
-                        val transportState = getTransportState()
-                        isPlaying = transportState == "PLAYING"
+                    }
 
-                        // Auto-advance when video ends naturally (PLAYING → STOPPED/NO_MEDIA_PRESENT)
-                        // Guard isLoadingTrack: Smart TVs briefly enter STOPPED during SetAVTransportURI
-                        // which would otherwise trigger a spurious next() and skip the intended video.
-                        if (wasPlaying && !isPlaying && !stoppedByUser && !isLoadingTrack && playlist.size > 1
-                            && transportState != "PAUSED_PLAYBACK") {
-                            withContext(Dispatchers.Main) { next() }
-                        }
+                    val transportState = getTransportState()
+                    isPlaying = transportState == "PLAYING"
+                    if (transportState != lastTransportState) {
+                        trace("TV transport state ${lastTransportState ?: \"<initial>\"} -> $transportState")
+                        lastTransportState = transportState
+                    }
 
-                        wasPlaying = isPlaying
-                        withContext(Dispatchers.Main) {
-                            onStateChanged?.invoke()
-                            onServiceStateChanged?.invoke()
-                        }
+                    // Auto-advance when video ends naturally (PLAYING → STOPPED/NO_MEDIA_PRESENT)
+                    // Guard isLoadingTrack: Smart TVs briefly enter STOPPED during SetAVTransportURI
+                    // which would otherwise trigger a spurious next() and skip the intended video.
+                    if (wasPlaying && !isPlaying && !stoppedByUser && !isLoadingTrack && playlist.size > 1
+                        && transportState != "PAUSED_PLAYBACK") {
+                        withContext(Dispatchers.Main) { next() }
+                    }
+
+                    wasPlaying = isPlaying
+                    withContext(Dispatchers.Main) {
+                        onStateChanged?.invoke()
+                        onServiceStateChanged?.invoke()
                     }
                 } catch (_: Exception) {
                 }
@@ -449,10 +467,10 @@ class DLNACastManager(private val context: Context) {
         }
         val protocolInfo = "http-get:*:$mimeType:$additionalInfo"
         val attributes = buildString {
-            info.size?.takeIf { it > 0 }?.let { append(" size=\\\"$it\\\"") }
-            info.durationMs?.takeIf { it > 0 }?.let { append(" duration=\\\"${formatDlnaDuration(it)}\\\"") }
+            info.size?.takeIf { it > 0 }?.let { append(" size=\"$it\"") }
+            info.durationMs?.takeIf { it > 0 }?.let { append(" duration=\"${formatDlnaDuration(it)}\"") }
             if (info.width != null && info.height != null && info.width!! > 0 && info.height!! > 0) {
-                append(" resolution=\\\"${info.width}x${info.height}\\\"")
+                append(" resolution=\"${info.width}x${info.height}\"")
             }
         }
         Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} profile=${info.videoProfile} level=${info.videoLevel} audio=${info.audioMime} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height} dlnaProfile=$profileName")
@@ -466,6 +484,7 @@ class DLNACastManager(private val context: Context) {
         currentTitle = videoTitle
         currentVideoPath = videoPath
         stoppedByUser = false
+        isPlaying = false
         isLoadingTrack = true
         scope.launch {
             try {
@@ -478,53 +497,69 @@ class DLNACastManager(private val context: Context) {
                 val metadata = buildDIDLMetadata(videoTitle, url, mime, mediaInfo)
                 trace("CAST 7 DIDL ready")
                 trace("CAST 8 SetAVTransportURI START")
-                sendSoap(device.controlUrl, "SetAVTransportURI",
-                    "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>")
-                trace("CAST 9 SetAVTransportURI END")
+                val setUriResult = sendSoapCommand(
+                    device.controlUrl,
+                    "SetAVTransportURI",
+                    "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
+                )
+                trace("CAST 9 SetAVTransportURI END success=${setUriResult.isSuccess}")
+                if (!setUriResult.isSuccess) {
+                    showCastError("SetAVTransportURI", setUriResult)
+                    isLoadingTrack = false
+                    return@launch
+                }
+
                 delay(500)
                 trace("CAST 10 Play START")
-                sendSoap(device.controlUrl, "Play", "<Speed>1</Speed>")
-                trace("CAST 11 Play END")
-                isPlaying = true
-                // Keep the flag set until the TV has had time to transition to PLAYING.
-                // Smart TVs briefly report STOPPED during SetAVTransportURI; without this
-                // guard the polling loop would fire next() and skip the intended video.
+                val playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+                trace("CAST 11 Play END success=${playResult.isSuccess}")
+                if (!playResult.isSuccess) {
+                    showCastError("Play", playResult)
+                    isLoadingTrack = false
+                    return@launch
+                }
+
+                // Do not assume PLAYING from HTTP success. The polling loop owns playback state
+                // and updates the UI only from the renderer's GetTransportInfo response.
                 delay(1500)
                 isLoadingTrack = false
             } catch (e: Exception) {
                 Log.e(tag, "loadAndPlay error", e)
                 trace("CAST ERROR ${e.javaClass.simpleName}: ${e.message}")
+                showCastError("Cast", SoapResult(exceptionMessage = e.message))
                 isLoadingTrack = false
             }
         }
     }
-
     // ── Playback controls ────────────────────────────────────────────────────
 
     fun play() {
         val device = connectedDevice ?: return
         scope.launch {
-            sendSoap(device.controlUrl, "Play", "<Speed>1</Speed>")
-            isPlaying = true
+            val result = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+            if (!result.isSuccess) showCastError("Play", result)
         }
     }
 
     fun pause() {
         val device = connectedDevice ?: return
         scope.launch {
-            sendSoap(device.controlUrl, "Pause", "")
-            isPlaying = false
+            val result = sendSoapCommand(device.controlUrl, "Pause", "")
+            if (!result.isSuccess) showCastError("Pause", result)
         }
     }
 
     fun seekTo(posMs: Long) {
         val device = connectedDevice ?: return
         scope.launch {
-            sendSoap(device.controlUrl, "Seek",
-                "<Unit>REL_TIME</Unit><Target>${msToTimeString(posMs)}</Target>")
+            val result = sendSoapCommand(
+                device.controlUrl,
+                "Seek",
+                "<Unit>REL_TIME</Unit><Target>${msToTimeString(posMs)}</Target>"
+            )
+            if (!result.isSuccess) showCastError("Seek", result)
         }
     }
-
     fun next() {
         if (playlist.isEmpty()) return
         currentIndex = (currentIndex + 1) % playlist.size
@@ -604,6 +639,20 @@ class DLNACastManager(private val context: Context) {
     // ── SOAP ─────────────────────────────────────────────────────────────────
 
     private fun sendSoap(controlUrl: String, action: String, args: String): String? {
+        val result = sendSoapRequest(controlUrl, action, args, persistentTrace = false)
+        return if (result.isSuccess) result.body else null
+    }
+
+    private fun sendSoapCommand(controlUrl: String, action: String, args: String): SoapResult =
+        sendSoapRequest(controlUrl, action, args, persistentTrace = true)
+
+    private fun sendSoapRequest(
+        controlUrl: String,
+        action: String,
+        args: String,
+        persistentTrace: Boolean
+    ): SoapResult {
+        var conn: HttpURLConnection? = null
         return try {
             val soap = """<?xml version="1.0"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
@@ -616,33 +665,82 @@ class DLNACastManager(private val context: Context) {
   </s:Body>
 </s:Envelope>"""
             val url = URL(controlUrl)
-            val conn = (url.openConnection() as HttpURLConnection).apply {
+            conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 3000
                 readTimeout = 3000
                 setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
-                setRequestProperty("SOAPAction",
-                    "\"urn:schemas-upnp-org:service:AVTransport:1#$action\"")
+                setRequestProperty(
+                    "SOAPAction",
+                    "\"urn:schemas-upnp-org:service:AVTransport:1#$action\""
+                )
             }
             val startedAt = System.currentTimeMillis()
             Log.d(tag, "SOAP -> $action url=$controlUrl")
-            conn.outputStream.write(soap.toByteArray(Charsets.UTF_8))
+            if (persistentTrace) trace("SOAP -> $action")
+            conn.outputStream.use { it.write(soap.toByteArray(Charsets.UTF_8)) }
             val status = conn.responseCode
             val response = try {
-                conn.inputStream.bufferedReader().readText()
+                conn.inputStream?.bufferedReader()?.use { it.readText() }
             } catch (_: Exception) {
-                conn.errorStream?.bufferedReader()?.readText()
+                conn.errorStream?.bufferedReader()?.use { it.readText() }
             }
-            Log.d(tag, "SOAP <- $action HTTP $status in ${System.currentTimeMillis() - startedAt}ms body=${response?.take(1000)}")
-            conn.disconnect()
-            response
+            val errorCode = response?.let { extractXmlTag(it, "errorCode") }
+            val errorDescription = response?.let { extractXmlTag(it, "errorDescription") }
+            val elapsed = System.currentTimeMillis() - startedAt
+            Log.d(tag, "SOAP <- $action HTTP $status in ${elapsed}ms body=${response?.take(1000)}")
+            if (persistentTrace) {
+                val fault = buildString {
+                    if (!errorCode.isNullOrBlank()) append(" UPnP=$errorCode")
+                    if (!errorDescription.isNullOrBlank()) append(" description=$errorDescription")
+                }
+                trace("SOAP <- $action HTTP $status in ${elapsed}ms$fault")
+            }
+            SoapResult(
+                httpStatus = status,
+                body = response,
+                errorCode = errorCode,
+                errorDescription = errorDescription
+            )
         } catch (e: Exception) {
             Log.w(tag, "SOAP $action failed: ${e.message}")
-            null
+            if (persistentTrace) trace("SOAP <- $action EXCEPTION ${e.javaClass.simpleName}: ${e.message}")
+            SoapResult(exceptionMessage = e.message)
+        } finally {
+            conn?.disconnect()
         }
     }
 
+    private fun showCastError(action: String, result: SoapResult) {
+        val description = result.errorDescription?.takeIf { it.isNotBlank() } ?: when (result.errorCode) {
+            "701" -> "Transition not available"
+            "710" -> "Seek mode not supported"
+            "711" -> "Illegal seek target"
+            "716" -> "Resource not found"
+            else -> null
+        }
+        val detail = when {
+            !result.errorCode.isNullOrBlank() -> buildString {
+                append("UPnP ${result.errorCode}")
+                if (!description.isNullOrBlank()) append(": $description")
+            }
+            result.httpStatus != null -> "HTTP ${result.httpStatus}"
+            !result.exceptionMessage.isNullOrBlank() -> result.exceptionMessage
+            else -> "Unknown error"
+        }
+        val label = when (action) {
+            "SetAVTransportURI" -> "Load media"
+            "Play" -> "Play"
+            "Pause" -> "Pause"
+            "Seek" -> "Seek"
+            else -> action
+        }
+        trace("CAST FAILURE action=$action detail=$detail")
+        scope.launch(Dispatchers.Main) {
+            Toast.makeText(context, "Cast failed: $label ($detail)", Toast.LENGTH_LONG).show()
+        }
+    }
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private fun extractHeader(response: String, header: String): String? =
