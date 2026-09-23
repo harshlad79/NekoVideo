@@ -47,6 +47,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -105,7 +108,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import com.nkls.nekovideo.R
 import kotlin.math.roundToInt
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
@@ -309,7 +312,7 @@ private fun loadSecureContent(folderPath: String, sortType: SortType): List<Medi
         // Add subdirectories using manifest subfolder entries for display names
         folder.listFiles()?.forEach { file ->
             if (!file.isDirectory || file.name == ".neko_thumbs") return@forEach
-            val subEntry = manifest.subfolders.orEmpty().find { it.obfuscatedName != null && it.obfuscatedName == file.name }
+            val subEntry = manifest.subfolders.orEmpty().find { it.obfuscatedName == file.name }
             val displayName = subEntry?.originalName ?: file.name
             val subIsLocked = FolderLockManager.isLocked(file.absolutePath)
             val subChildren = file.listFiles() // single listFiles() call, reused below
@@ -869,7 +872,7 @@ fun SortRow(
                             onSearchExpandChange(false)
                         }) {
                             Icon(
-                                Icons.Default.ArrowBack,
+                                Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Fechar busca",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -952,7 +955,7 @@ fun SortRow(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Icon(
-                                        Icons.Default.Sort,
+                                        Icons.AutoMirrored.Filled.Sort,
                                         contentDescription = null,
                                         modifier = Modifier.size(16.dp),
                                         tint = MaterialTheme.colorScheme.onSecondaryContainer
@@ -2476,7 +2479,7 @@ private fun VideoContent(
 
         if (isBeingMoved && !isSelected) {
             Icon(
-                imageVector = Icons.Default.DriveFileMove,
+                imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
                 contentDescription = "Sendo movido",
                 tint = MaterialTheme.colorScheme.tertiary,
                 modifier = Modifier

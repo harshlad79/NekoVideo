@@ -21,6 +21,7 @@ import androidx.room.migration.Migration
 import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.google.gson.Gson
+import com.google.gson.Strictness
 import com.google.gson.annotations.SerializedName
 import com.google.gson.stream.JsonReader
 import com.google.gson.stream.JsonToken
@@ -710,7 +711,7 @@ object VideoTagStore {
 
     private fun parseBackupPayloadStrict(content: String): TagBackupPayload {
         val reader = JsonReader(StringReader(content)).apply {
-            isLenient = false
+            setStrictness(Strictness.LEGACY_STRICT)
         }
         val payload = gson.fromJson<TagBackupPayload>(reader, TagBackupPayload::class.java)
             ?: error("backup_payload_invalid")

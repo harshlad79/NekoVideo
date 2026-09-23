@@ -55,7 +55,7 @@ import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.ScreenRotation
@@ -663,7 +663,7 @@ fun CustomVideoControls(
 
                             // Repeat mode
                             val (repIcon, repDesc, repActive) = when (repeatMode) {
-                                RepeatMode.NONE -> Triple(Icons.Default.PlaylistPlay, stringResource(R.string.player_repeat_normal), false)
+                                RepeatMode.NONE -> Triple(Icons.AutoMirrored.Filled.PlaylistPlay, stringResource(R.string.player_repeat_normal), false)
                                 RepeatMode.REPEAT_ALL -> Triple(Icons.Default.Repeat, stringResource(R.string.player_repeat_all), true)
                                 RepeatMode.REPEAT_ONE -> Triple(Icons.Default.RepeatOne, stringResource(R.string.player_repeat_one), true)
                             }

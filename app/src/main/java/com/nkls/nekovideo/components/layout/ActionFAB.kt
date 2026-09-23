@@ -306,7 +306,7 @@ fun ActionFAB(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.DriveFileMove,
+                            imageVector = Icons.AutoMirrored.Filled.DriveFileMove,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.size(14.dp)
