@@ -82,7 +82,7 @@ jobs:
           CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
           printf '%s\n' "$CERT_OUTPUT"
           APK_FP=$(printf '%s\n' "$CERT_OUTPUT" \
-            | grep -F 'Signer #1 certificate SHA-256 digest:' \
+            | grep -E 'certificate SHA-256 digest:' \
             | awk '{print $NF}' \
             | head -n 1 \
             | tr '[:lower:]' '[:upper:]')
