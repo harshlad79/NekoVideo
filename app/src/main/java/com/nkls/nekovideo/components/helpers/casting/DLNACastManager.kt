@@ -569,12 +569,16 @@ class DLNACastManager(private val context: Context) {
                 setRequestProperty("SOAPAction",
                     "\"urn:schemas-upnp-org:service:AVTransport:1#$action\"")
             }
+            val startedAt = System.currentTimeMillis()
+            Log.d(tag, "SOAP -> $action url=$controlUrl")
             conn.outputStream.write(soap.toByteArray(Charsets.UTF_8))
+            val status = conn.responseCode
             val response = try {
                 conn.inputStream.bufferedReader().readText()
             } catch (_: Exception) {
                 conn.errorStream?.bufferedReader()?.readText()
             }
+            Log.d(tag, "SOAP <- $action HTTP $status in ${System.currentTimeMillis() - startedAt}ms body=${response?.take(1000)}")
             conn.disconnect()
             response
         } catch (e: Exception) {
