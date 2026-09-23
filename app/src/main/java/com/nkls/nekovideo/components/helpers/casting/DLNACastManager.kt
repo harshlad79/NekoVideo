@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.wifi.WifiManager
 import android.util.Log
+import com.nkls.nekovideo.DebugTraceLogger
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.*
 import java.io.File
@@ -268,10 +269,12 @@ class DLNACastManager(private val context: Context) {
     // ── Casting ──────────────────────────────────────────────────────────────
 
     fun castVideo(videoPath: String, videoTitle: String) {
+        trace("CAST 1 castVideo entered title=$videoTitle")
         playlist = listOf(videoPath)
         playlistTitles = listOf(videoTitle)
         currentIndex = 0
-        if (!prepareServer()) return
+        if (!prepareServer()) { trace("CAST prepareServer failed"); return }
+        trace("CAST 2 server ready")
         loadAndPlay(videoPath, videoTitle)
     }
 
@@ -458,6 +461,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     private fun loadAndPlay(videoPath: String, videoTitle: String) {
+        trace("CAST 3 loadAndPlay entered title=$videoTitle")
         val device = connectedDevice ?: return
         currentTitle = videoTitle
         currentVideoPath = videoPath
@@ -466,13 +470,21 @@ class DLNACastManager(private val context: Context) {
         scope.launch {
             try {
                 val url = videoUrlFor(videoPath)
+                trace("CAST 4 URL ready url=$url")
                 val mime = mimeTypeFor(videoPath)
+                trace("CAST 5 probeMedia START mime=$mime")
                 val mediaInfo = probeMedia(videoPath)
+                trace("CAST 6 probeMedia END video=${mediaInfo.videoMime} audio=${mediaInfo.audioMime}")
                 val metadata = buildDIDLMetadata(videoTitle, url, mime, mediaInfo)
+                trace("CAST 7 DIDL ready")
+                trace("CAST 8 SetAVTransportURI START")
                 sendSoap(device.controlUrl, "SetAVTransportURI",
                     "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>")
+                trace("CAST 9 SetAVTransportURI END")
                 delay(500)
+                trace("CAST 10 Play START")
                 sendSoap(device.controlUrl, "Play", "<Speed>1</Speed>")
+                trace("CAST 11 Play END")
                 isPlaying = true
                 // Keep the flag set until the TV has had time to transition to PLAYING.
                 // Smart TVs briefly report STOPPED during SetAVTransportURI; without this
@@ -481,6 +493,7 @@ class DLNACastManager(private val context: Context) {
                 isLoadingTrack = false
             } catch (e: Exception) {
                 Log.e(tag, "loadAndPlay error", e)
+                trace("CAST ERROR ${e.javaClass.simpleName}: ${e.message}")
                 isLoadingTrack = false
             }
         }
@@ -657,6 +670,11 @@ class DLNACastManager(private val context: Context) {
                 else -> 0L
             }
         } catch (_: Exception) { 0L }
+    }
+
+    private fun trace(message: String) {
+        Log.d(tag, message)
+        DebugTraceLogger.log(context, message)
     }
 
     private fun String.escapeXml() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
