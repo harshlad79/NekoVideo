@@ -85,6 +85,8 @@ class DLNACastManager(private val context: Context) {
     @Volatile private var latestRequestGeneration = 0L
     @Volatile private var desiredPositionMs = 0L
     @Volatile private var desiredPositionExplicit = false
+    @Volatile private var latestActiveSeekVersion = 0L
+    @Volatile private var activeSeekInProgress = false
     private var confirmedVideoPath = ""
     private var confirmedVideoUrl = ""
 
@@ -596,6 +598,12 @@ class DLNACastManager(private val context: Context) {
         return latestRequestGeneration
     }
 
+    @Synchronized
+    private fun nextActiveSeekVersion(): Long {
+        latestActiveSeekVersion += 1
+        return latestActiveSeekVersion
+    }
+
     private fun isCurrentRequest(request: CastRequest): Boolean =
         request.generation == latestRequestGeneration
 
@@ -620,6 +628,8 @@ class DLNACastManager(private val context: Context) {
         val initialPosition = startPositionMs.coerceAtLeast(0L)
         desiredPositionMs = initialPosition
         desiredPositionExplicit = seekOnStart
+        activeSeekInProgress = false
+        nextActiveSeekVersion()
 
         currentTitle = videoTitle
         currentVideoPath = videoPath
@@ -786,23 +796,26 @@ class DLNACastManager(private val context: Context) {
             }
 
             if (!isCurrentRequest(request)) return
-            var snapshot = waitForExpectedPlayback(
-                request = request,
-                expectedUrl = url,
-                timeoutMs = 15_000,
-                reason = "after-play"
-            )
-            if (snapshot == null) {
-                if (isCurrentRequest(request)) {
-                    trace("CAST warning: renderer did not confirm expected media playback")
-                    markRequestError(request)
-                }
-                return
-            }
-
-            val targetPosition = if (isCurrentRequest(request)) desiredPositionMs else return
             val shouldSeek = desiredPositionExplicit || request.seekOnStart
+            val snapshot: RendererSnapshot
+
             if (shouldSeek) {
+                val started = waitForPlaybackStartForSeek(
+                    request = request,
+                    expectedUrl = url,
+                    timeoutMs = 15_000,
+                    graceMs = 15_000
+                )
+                if (!started) {
+                    if (isCurrentRequest(request)) {
+                        trace("CAST warning: renderer did not reach PLAYING before pending seek")
+                        markRequestError(request)
+                    }
+                    return
+                }
+
+                if (!isCurrentRequest(request)) return
+                val targetPosition = desiredPositionMs
                 trace("CAST apply pending seek generation=${request.generation} target=${msToTimeString(targetPosition)}")
                 val seekResult = sendSoapCommand(
                     device.controlUrl,
@@ -816,13 +829,30 @@ class DLNACastManager(private val context: Context) {
                     }
                     return
                 }
+
                 snapshot = waitForExpectedPlayback(
                     request = request,
                     expectedUrl = url,
                     timeoutMs = 15_000,
-                    reason = "after-start-seek"
+                    graceMs = 10_000,
+                    reason = "after-start-seek",
+                    expectedPositionMs = targetPosition
                 ) ?: run {
                     if (isCurrentRequest(request)) markRequestError(request)
+                    return
+                }
+            } else {
+                snapshot = waitForExpectedPlayback(
+                    request = request,
+                    expectedUrl = url,
+                    timeoutMs = 15_000,
+                    graceMs = 15_000,
+                    reason = "after-play"
+                ) ?: run {
+                    if (isCurrentRequest(request)) {
+                        trace("CAST warning: renderer did not confirm expected media playback")
+                        markRequestError(request)
+                    }
                     return
                 }
             }
@@ -838,17 +868,79 @@ class DLNACastManager(private val context: Context) {
         }
     }
 
+    private suspend fun waitForPlaybackStartForSeek(
+        request: CastRequest,
+        expectedUrl: String,
+        timeoutMs: Long,
+        graceMs: Long
+    ): Boolean {
+        var deadline = System.currentTimeMillis() + timeoutMs
+        var graceUsed = false
+        var lastState: String? = null
+        var lastUri: String? = null
+
+        while (isConnected && isCurrentRequest(request)) {
+            val state = getTransportStateOrNull()
+            if (state != null && state != lastState) {
+                trace("CAST wait[pre-seek-play] generation=${request.generation} state=$state")
+                lastState = state
+            }
+
+            if (state == "PLAYING") {
+                val currentUri = getCurrentMediaUriOrNull()
+                if (!currentUri.isNullOrBlank() && currentUri != lastUri) {
+                    trace("CAST wait[pre-seek-play] generation=${request.generation} uri=$currentUri")
+                    lastUri = currentUri
+                }
+                val uriMatches = currentUri.isNullOrBlank() || mediaUrisMatch(currentUri, expectedUrl)
+                if (uriMatches) return true
+            }
+
+            if (System.currentTimeMillis() >= deadline) {
+                val finalUri = getCurrentMediaUriOrNull()
+                val finalState = getTransportStateOrNull()
+                if (!finalUri.isNullOrBlank()) lastUri = finalUri
+                if (finalState != null) lastState = finalState
+
+                val uriMatches = finalUri.isNullOrBlank() || mediaUrisMatch(finalUri, expectedUrl)
+                if (uriMatches && finalState == "PLAYING") {
+                    trace("CAST wait[pre-seek-play] final recheck reached PLAYING generation=${request.generation}")
+                    return true
+                }
+
+                if (!graceUsed && uriMatches && finalState == "TRANSITIONING") {
+                    graceUsed = true
+                    deadline = System.currentTimeMillis() + graceMs
+                    trace("CAST wait[pre-seek-play] grace generation=${request.generation} +${graceMs}ms")
+                } else {
+                    trace(
+                        "CAST wait[pre-seek-play] timeout/superseded generation=${request.generation} " +
+                            "state=${lastState ?: "unknown"} uri=${lastUri ?: "unknown"}"
+                    )
+                    return false
+                }
+            }
+
+            delay(100)
+        }
+        return false
+    }
+
     private suspend fun waitForExpectedPlayback(
         request: CastRequest,
         expectedUrl: String,
         timeoutMs: Long,
-        reason: String
+        graceMs: Long = 0L,
+        reason: String,
+        expectedPositionMs: Long? = null
     ): RendererSnapshot? {
-        val deadline = System.currentTimeMillis() + timeoutMs
+        var deadline = System.currentTimeMillis() + timeoutMs
+        var graceUsed = false
         var lastState: String? = null
         var lastUri: String? = null
+        var lastPositionMs: Long? = null
 
-        while (isConnected && isCurrentRequest(request) && System.currentTimeMillis() < deadline) {
+        while (isConnected && isCurrentRequest(request)) {
             val currentUri = getCurrentMediaUriOrNull()
             val state = getTransportStateOrNull()
             val pos = getPositionInfo()
@@ -861,22 +953,51 @@ class DLNACastManager(private val context: Context) {
                 trace("CAST wait[$reason] generation=${request.generation} uri=$currentUri")
                 lastUri = currentUri
             }
+            if (pos != null) lastPositionMs = pos.first
 
             val uriMatches = currentUri.isNullOrBlank() || mediaUrisMatch(currentUri, expectedUrl)
-            if (uriMatches && state == "PLAYING" && pos != null && pos.second > 0L) {
-                return RendererSnapshot(
-                    state = state,
-                    positionMs = pos.first,
-                    durationMs = pos.second
-                )
+            val positionMatches = expectedPositionMs == null ||
+                (pos != null && kotlin.math.abs(pos.first - expectedPositionMs) <= 3_000L)
+
+            if (uriMatches && state == "PLAYING" && pos != null && pos.second > 0L && positionMatches) {
+                return RendererSnapshot(state, pos.first, pos.second)
             }
+
+            if (System.currentTimeMillis() >= deadline) {
+                val finalUri = getCurrentMediaUriOrNull()
+                val finalState = getTransportStateOrNull()
+                val finalPos = getPositionInfo()
+                if (!finalUri.isNullOrBlank()) lastUri = finalUri
+                if (finalState != null) lastState = finalState
+                if (finalPos != null) lastPositionMs = finalPos.first
+
+                val finalUriMatches = finalUri.isNullOrBlank() || mediaUrisMatch(finalUri, expectedUrl)
+                val finalPositionMatches = expectedPositionMs == null ||
+                    (finalPos != null && kotlin.math.abs(finalPos.first - expectedPositionMs) <= 3_000L)
+
+                if (finalUriMatches && finalState == "PLAYING" &&
+                    finalPos != null && finalPos.second > 0L && finalPositionMatches) {
+                    trace("CAST wait[$reason] final recheck succeeded generation=${request.generation}")
+                    return RendererSnapshot(finalState, finalPos.first, finalPos.second)
+                }
+
+                if (!graceUsed && graceMs > 0L && finalUriMatches && finalState == "TRANSITIONING") {
+                    graceUsed = true
+                    deadline = System.currentTimeMillis() + graceMs
+                    trace("CAST wait[$reason] grace generation=${request.generation} +${graceMs}ms")
+                } else {
+                    trace(
+                        "CAST wait[$reason] timeout/superseded generation=${request.generation} " +
+                            "state=${lastState ?: "unknown"} uri=${lastUri ?: "unknown"} " +
+                            "position=${lastPositionMs?.let { msToTimeString(it) } ?: "unknown"} " +
+                            "expected=${expectedPositionMs?.let { msToTimeString(it) } ?: "any"}"
+                    )
+                    return null
+                }
+            }
+
             delay(250)
         }
-
-        trace(
-            "CAST wait[$reason] timeout/superseded generation=${request.generation} " +
-                "state=${lastState ?: "unknown"} uri=${lastUri ?: "unknown"}"
-        )
         return null
     }
 
@@ -1045,7 +1166,13 @@ class DLNACastManager(private val context: Context) {
                 desiredPositionMs = bounded
                 desiredPositionExplicit = true
                 currentPositionMs = bounded
-                trace("CAST pending seek generation=$latestRequestGeneration target=${msToTimeString(bounded)}")
+
+                if (activeSeekInProgress) {
+                    val version = nextActiveSeekVersion()
+                    trace("CAST active seek updated version=$version target=${msToTimeString(bounded)}")
+                } else {
+                    trace("CAST pending seek generation=$latestRequestGeneration target=${msToTimeString(bounded)}")
+                }
                 notifyStateChangedAsync()
             }
             CastControlState.READY_PAUSED,
@@ -1053,29 +1180,175 @@ class DLNACastManager(private val context: Context) {
             CastControlState.ERROR -> beginBrowseAtPosition(bounded)
             CastControlState.READY_PLAYING -> {
                 val device = connectedDevice ?: return
+                val expectedUrl = confirmedVideoUrl
+                if (expectedUrl.isEmpty()) return
+
+                desiredPositionMs = bounded
+                desiredPositionExplicit = true
+                val seekVersion = nextActiveSeekVersion()
+                val sessionGeneration = latestRequestGeneration
+                activeSeekInProgress = true
                 isPlaying = false
                 isLoadingTrack = true
                 controlState = CastControlState.PREPARING
                 currentPositionMs = bounded
+                trace("CAST active seek start version=$seekVersion target=${msToTimeString(bounded)}")
                 notifyStateChangedAsync()
+
                 scope.launch {
-                    val result = sendSoapCommand(
-                        device.controlUrl,
-                        "Seek",
-                        "<Unit>REL_TIME</Unit><Target>${msToTimeString(bounded)}</Target>"
+                    processLatestActiveSeek(
+                        device = device,
+                        expectedUrl = expectedUrl,
+                        sessionGeneration = sessionGeneration
                     )
-                    if (!result.isSuccess) {
-                        showCastError("Seek", result)
-                        isLoadingTrack = false
-                        controlState = CastControlState.ERROR
-                        notifyStateChanged()
-                        return@launch
-                    }
-                    confirmCurrentMediaState("seek")
                 }
             }
             else -> trace("CAST Seek skipped state=$controlState target=${msToTimeString(bounded)}")
         }
+    }
+
+    private suspend fun processLatestActiveSeek(
+        device: DLNADevice,
+        expectedUrl: String,
+        sessionGeneration: Long
+    ) {
+        try {
+            while (isConnected &&
+                sessionGeneration == latestRequestGeneration &&
+                confirmedVideoUrl == expectedUrl) {
+                val seekVersion = latestActiveSeekVersion
+                val target = desiredPositionMs
+
+                trace("CAST active seek send version=$seekVersion target=${msToTimeString(target)}")
+                val result = sendSoapCommand(
+                    device.controlUrl,
+                    "Seek",
+                    "<Unit>REL_TIME</Unit><Target>${msToTimeString(target)}</Target>"
+                )
+
+                if (seekVersion != latestActiveSeekVersion) {
+                    trace("CAST active seek superseded after command version=$seekVersion")
+                    continue
+                }
+
+                if (!result.isSuccess) {
+                    showCastError("Seek", result)
+                    if (sessionGeneration == latestRequestGeneration) {
+                        isPlaying = false
+                        isLoadingTrack = false
+                        controlState = CastControlState.ERROR
+                        activeSeekInProgress = false
+                        notifyStateChanged()
+                    }
+                    return
+                }
+
+                val snapshot = waitForActiveSeekConfirmation(
+                    expectedUrl = expectedUrl,
+                    expectedPositionMs = target,
+                    seekVersion = seekVersion,
+                    sessionGeneration = sessionGeneration
+                )
+
+                if (seekVersion != latestActiveSeekVersion) {
+                    trace("CAST active seek superseded while confirming version=$seekVersion")
+                    continue
+                }
+
+                if (snapshot == null) {
+                    if (sessionGeneration == latestRequestGeneration) {
+                        isPlaying = false
+                        isLoadingTrack = false
+                        controlState = CastControlState.ERROR
+                        activeSeekInProgress = false
+                        notifyStateChanged()
+                    }
+                    return
+                }
+
+                currentPositionMs = snapshot.positionMs
+                durationMs = snapshot.durationMs
+                isPlaying = true
+                isLoadingTrack = false
+                desiredPositionExplicit = false
+                activeSeekInProgress = false
+                controlState = CastControlState.READY_PLAYING
+                trace("CAST active seek READY version=$seekVersion position=${msToTimeString(snapshot.positionMs)}")
+                notifyStateChanged()
+                return
+            }
+        } finally {
+            if (sessionGeneration != latestRequestGeneration || confirmedVideoUrl != expectedUrl) {
+                activeSeekInProgress = false
+            }
+        }
+    }
+
+    private suspend fun waitForActiveSeekConfirmation(
+        expectedUrl: String,
+        expectedPositionMs: Long,
+        seekVersion: Long,
+        sessionGeneration: Long
+    ): RendererSnapshot? {
+        var deadline = System.currentTimeMillis() + 10_000L
+        var graceUsed = false
+        var lastState: String? = null
+        var lastPositionMs: Long? = null
+
+        while (isConnected &&
+            sessionGeneration == latestRequestGeneration &&
+            seekVersion == latestActiveSeekVersion) {
+            val uri = getCurrentMediaUriOrNull()
+            val state = getTransportStateOrNull()
+            val pos = getPositionInfo()
+
+            if (state != null && state != lastState) {
+                trace("CAST wait[active-seek] version=$seekVersion state=$state")
+                lastState = state
+            }
+            if (pos != null) lastPositionMs = pos.first
+
+            val uriMatches = uri.isNullOrBlank() || mediaUrisMatch(uri, expectedUrl)
+            val positionMatches = pos != null &&
+                kotlin.math.abs(pos.first - expectedPositionMs) <= 3_000L
+
+            if (uriMatches && state == "PLAYING" && pos != null &&
+                pos.second > 0L && positionMatches) {
+                return RendererSnapshot(state, pos.first, pos.second)
+            }
+
+            if (System.currentTimeMillis() >= deadline) {
+                val finalUri = getCurrentMediaUriOrNull()
+                val finalState = getTransportStateOrNull()
+                val finalPos = getPositionInfo()
+                val finalUriMatches = finalUri.isNullOrBlank() || mediaUrisMatch(finalUri, expectedUrl)
+                val finalPositionMatches = finalPos != null &&
+                    kotlin.math.abs(finalPos.first - expectedPositionMs) <= 3_000L
+
+                if (finalUriMatches && finalState == "PLAYING" &&
+                    finalPos != null && finalPos.second > 0L && finalPositionMatches) {
+                    return RendererSnapshot(finalState, finalPos.first, finalPos.second)
+                }
+
+                if (!graceUsed && finalUriMatches && finalState == "TRANSITIONING") {
+                    graceUsed = true
+                    deadline = System.currentTimeMillis() + 5_000L
+                    trace("CAST wait[active-seek] grace version=$seekVersion +5000ms")
+                } else {
+                    trace(
+                        "CAST wait[active-seek] timeout version=$seekVersion " +
+                            "state=${finalState ?: lastState ?: "unknown"} " +
+                            "position=${(finalPos?.first ?: lastPositionMs)?.let { msToTimeString(it) } ?: "unknown"} " +
+                            "expected=${msToTimeString(expectedPositionMs)}"
+                    )
+                    return null
+                }
+            }
+
+            delay(200)
+        }
+
+        return null
     }
 
     fun seekBy(deltaMs: Long) {
