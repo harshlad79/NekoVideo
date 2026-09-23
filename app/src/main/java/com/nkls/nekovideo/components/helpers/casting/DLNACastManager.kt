@@ -69,7 +69,8 @@ class DLNACastManager(private val context: Context) {
         val videoPath: String,
         val videoTitle: String,
         val startPositionMs: Long,
-        val seekOnStart: Boolean
+        val seekOnStart: Boolean,
+        val queuedAtMs: Long
     )
 
     private data class RendererSnapshot(
@@ -83,6 +84,7 @@ class DLNACastManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val castRequests = Channel<CastRequest>(Channel.CONFLATED)
     private val activeSeekRequests = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var activeCastWorkerGeneration: Long? = null
     @Volatile private var latestRequestGeneration = 0L
     @Volatile private var desiredPositionMs = 0L
     @Volatile private var desiredPositionExplicit = false
@@ -95,7 +97,26 @@ class DLNACastManager(private val context: Context) {
 
     private val castWorkerJob = scope.launch {
         for (request in castRequests) {
-            processCastRequest(request)
+            val workerStartedAtMs = System.currentTimeMillis()
+            activeCastWorkerGeneration = request.generation
+            trace(
+                "CAST worker enter generation=${request.generation} " +
+                    "queueWaitMs=${workerStartedAtMs - request.queuedAtMs}"
+            )
+            try {
+                processCastRequest(request)
+            } finally {
+                val finishedAtMs = System.currentTimeMillis()
+                trace(
+                    "CAST worker leave generation=${request.generation} " +
+                        "workerMs=${finishedAtMs - workerStartedAtMs} " +
+                        "totalSinceQueueMs=${finishedAtMs - request.queuedAtMs} " +
+                        "current=${request.generation == latestRequestGeneration}"
+                )
+                if (activeCastWorkerGeneration == request.generation) {
+                    activeCastWorkerGeneration = null
+                }
+            }
         }
     }
 
@@ -664,7 +685,11 @@ class DLNACastManager(private val context: Context) {
         isLoadingTrack = true
         controlState = CastControlState.PREPARING
 
-        trace("CAST queue generation=$generation title=$videoTitle")
+        val queuedAtMs = System.currentTimeMillis()
+        trace(
+            "CAST queue generation=$generation worker=${activeCastWorkerGeneration ?: "idle"} " +
+                "title=$videoTitle"
+        )
         notifyStateChangedAsync()
 
         val result = castRequests.trySend(
@@ -673,7 +698,8 @@ class DLNACastManager(private val context: Context) {
                 videoPath = videoPath,
                 videoTitle = videoTitle,
                 startPositionMs = initialPosition,
-                seekOnStart = seekOnStart
+                seekOnStart = seekOnStart,
+                queuedAtMs = queuedAtMs
             )
         )
         if (result.isFailure) {
@@ -688,11 +714,19 @@ class DLNACastManager(private val context: Context) {
 
     private suspend fun processCastRequest(request: CastRequest) {
         if (!isCurrentRequest(request)) {
-            trace("CAST drop superseded generation=${request.generation}")
+            trace(
+                "CAST drop superseded generation=${request.generation} " +
+                    "queueWaitMs=${System.currentTimeMillis() - request.queuedAtMs} " +
+                    "latest=$latestRequestGeneration"
+            )
             return
         }
 
-        trace("CAST 3 loadAndPlay entered generation=${request.generation} title=${request.videoTitle}")
+        trace(
+            "CAST 3 loadAndPlay entered generation=${request.generation} " +
+                "queueWaitMs=${System.currentTimeMillis() - request.queuedAtMs} " +
+                "title=${request.videoTitle}"
+        )
         val device = connectedDevice ?: return
 
         val pendingPause = pauseSyncJob
