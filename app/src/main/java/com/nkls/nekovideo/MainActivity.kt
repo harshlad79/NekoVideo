@@ -3,6 +3,8 @@ package com.nkls.nekovideo
 import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -17,7 +19,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -230,6 +235,10 @@ class MainActivity : AppCompatActivity() {
             val timeState = _lastIntentTime.value
             val folderPathState = _openFolderPath.value
             val externalVideoState = _externalVideoReceived.value
+            val crashFilesState = androidx.compose.runtime.remember {
+                mutableStateOf(DebugCrashLogger.list(this@MainActivity))
+            }
+            val selectedCrashState = androidx.compose.runtime.remember { mutableStateOf<java.io.File?>(null) }
 
             LaunchedEffect(currentTheme, configuration.uiMode) {
                 applySystemBarsForTheme(currentTheme)
@@ -250,6 +259,44 @@ class MainActivity : AppCompatActivity() {
                         openFolderPath = folderPathState,
                         externalVideoReceived = externalVideoState,
                         onFolderPathConsumed = { _openFolderPath.value = null }
+                    )
+                }
+
+                val crashFile = selectedCrashState.value ?: crashFilesState.value.firstOrNull()
+                crashFile?.let { file ->
+                    val crashLog = DebugCrashLogger.read(file).orEmpty()
+                    AlertDialog(
+                        onDismissRequest = { selectedCrashState.value = null; crashFilesState.value = emptyList() },
+                        title = { Text("Previous crash detected") },
+                        text = { Text("${file.name}\nSaved crash logs: ${crashFilesState.value.size}") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("NekoVideo crash log", crashLog))
+                            }) { Text("Copy") }
+                        },
+                        dismissButton = {
+                            androidx.compose.foundation.layout.Row {
+                                TextButton(onClick = {
+                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_SUBJECT, file.name)
+                                        putExtra(Intent.EXTRA_TEXT, crashLog)
+                                    }
+                                    startActivity(Intent.createChooser(sendIntent, "Share crash log"))
+                                }) { Text("Share") }
+                                TextButton(onClick = {
+                                    DebugCrashLogger.delete(file)
+                                    val remaining = DebugCrashLogger.list(this@MainActivity)
+                                    crashFilesState.value = remaining
+                                    selectedCrashState.value = remaining.firstOrNull()
+                                }) { Text("Delete") }
+                                TextButton(onClick = {
+                                    selectedCrashState.value = null
+                                    crashFilesState.value = emptyList()
+                                }) { Text("Close") }
+                            }
+                        }
                     )
                 }
             }
