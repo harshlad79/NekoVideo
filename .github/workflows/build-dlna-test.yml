@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   build:
@@ -29,15 +30,67 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Delete legacy debug keystore cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "Legacy cache before cleanup:"
+          gh cache list --key nekovideo-dlna-debug-keystore-v1 --limit 100 || true
+          gh cache delete nekovideo-dlna-debug-keystore-v1 --ref refs/heads/dlna-samsung-compat || true
+          echo "Legacy cache after cleanup:"
+          gh cache list --key nekovideo-dlna-debug-keystore-v1 --limit 100 || true
+
       - name: Restore fixed debug keystore
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
+          test -n "$DEBUG_KEYSTORE_BASE64" || { echo "DEBUG_KEYSTORE_BASE64 is empty"; exit 1; }
           mkdir -p ~/.android
           printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore
+          test -s ~/.android/debug.keystore || { echo "Decoded debug.keystore is empty"; exit 1; }
+
+      - name: Verify debug signing certificate
+        env:
+          EXPECTED_DEBUG_CERT_SHA256: "A1:9F:E5:C7:64:40:1A:04:3F:D9:F2:BD:2A:07:6A:BB:16:A1:A2:C3:94:88:95:8A:D0:9A:AC:B3:3C:57:29:A1"
+        run: |
+          ACTUAL=$(keytool -list -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android 2>/dev/null \
+            | sed -n 's/^[[:space:]]*SHA256: //p' \
+            | head -n 1)
+          test -n "$ACTUAL" || { echo "Could not read SHA256 fingerprint from debug.keystore"; exit 1; }
+          echo "Debug signing certificate SHA256: $ACTUAL"
+          if [ "$ACTUAL" != "$EXPECTED_DEBUG_CERT_SHA256" ]; then
+            echo "Unexpected debug signing certificate."
+            echo "Expected: $EXPECTED_DEBUG_CERT_SHA256"
+            echo "Actual:   $ACTUAL"
+            exit 1
+          fi
 
       - name: Build debug APK
         run: ./gradlew assembleDebug
+
+      - name: Verify built APK signing certificate
+        env:
+          EXPECTED_DEBUG_CERT_SHA256: "A1:9F:E5:C7:64:40:1A:04:3F:D9:F2:BD:2A:07:6A:BB:16:A1:A2:C3:94:88:95:8A:D0:9A:AC:B3:3C:57:29:A1"
+        run: |
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$APK" || { echo "Debug APK not found"; exit 1; }
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -n "$APKSIGNER" || { echo "apksigner not found"; exit 1; }
+          APK_FP=$($APKSIGNER verify --print-certs "$APK" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | head -n 1 \
+            | tr '[:lower:]' '[:upper:]')
+          EXPECTED_COMPACT=$(printf '%s' "$EXPECTED_DEBUG_CERT_SHA256" | tr -d ':')
+          echo "APK signing certificate SHA256: $APK_FP"
+          if [ "$APK_FP" != "$EXPECTED_COMPACT" ]; then
+            echo "Built APK was not signed with the expected certificate."
+            echo "Expected: $EXPECTED_COMPACT"
+            echo "Actual:   $APK_FP"
+            exit 1
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
