@@ -9,7 +9,9 @@ import java.util.Date
 import java.util.Locale
 
 object DebugCrashLogger {
-    private const val FILE_NAME = "last_crash.txt"
+    private const val PREFIX = "crash-"
+    private const val SUFFIX = ".txt"
+    private const val MAX_FILES = 10
 
     fun install(context: Context) {
         if (!BuildConfig.DEBUG) return
@@ -18,27 +20,38 @@ object DebugCrashLogger {
 
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
+                val now = Date()
+                val fileStamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(now)
+                val displayStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US).format(now)
                 val sw = StringWriter()
                 throwable.printStackTrace(PrintWriter(sw))
-                val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS Z", Locale.US).format(Date())
-                File(appContext.filesDir, FILE_NAME).writeText(
-                    "timestamp=$timestamp\nthread=${thread.name}\n\n$sw"
+
+                File(appContext.filesDir, "$PREFIX$fileStamp$SUFFIX").writeText(
+                    "timestamp=$displayStamp\nthread=${thread.name}\n\n$sw"
                 )
+                trimOldFiles(appContext)
             } catch (_: Throwable) {
-                // Never interfere with the platform crash path.
+                // Crash logging must never interfere with the platform crash path.
             } finally {
                 previous?.uncaughtException(thread, throwable)
             }
         }
     }
 
-    fun read(context: Context): String? {
-        if (!BuildConfig.DEBUG) return null
-        val file = File(context.filesDir, FILE_NAME)
-        return if (file.isFile) file.readText() else null
+    fun list(context: Context): List<File> {
+        if (!BuildConfig.DEBUG) return emptyList()
+        return context.filesDir.listFiles { file ->
+            file.isFile && file.name.startsWith(PREFIX) && file.name.endsWith(SUFFIX)
+        }?.sortedByDescending { it.name } ?: emptyList()
     }
 
-    fun clear(context: Context) {
-        File(context.filesDir, FILE_NAME).delete()
+    fun read(file: File): String? =
+        runCatching { if (file.isFile) file.readText() else null }.getOrNull()
+
+    fun delete(file: File): Boolean =
+        runCatching { file.delete() }.getOrDefault(false)
+
+    private fun trimOldFiles(context: Context) {
+        list(context).drop(MAX_FILES).forEach { runCatching { it.delete() } }
     }
 }
