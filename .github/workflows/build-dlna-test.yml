@@ -79,10 +79,14 @@ jobs:
           test -n "$APK" || { echo "Debug APK not found"; exit 1; }
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           test -n "$APKSIGNER" || { echo "apksigner not found"; exit 1; }
-          APK_FP=$($APKSIGNER verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+          CERT_OUTPUT=$("$APKSIGNER" verify --print-certs "$APK" 2>&1)
+          printf '%s\n' "$CERT_OUTPUT"
+          APK_FP=$(printf '%s\n' "$CERT_OUTPUT" \
+            | grep -F 'Signer #1 certificate SHA-256 digest:' \
+            | awk '{print $NF}' \
             | head -n 1 \
             | tr '[:lower:]' '[:upper:]')
+          test -n "$APK_FP" || { echo "Could not read SHA-256 fingerprint from built APK"; exit 1; }
           EXPECTED_COMPACT=$(printf '%s' "$EXPECTED_DEBUG_CERT_SHA256" | tr -d ':')
           echo "APK signing certificate SHA256: $APK_FP"
           if [ "$APK_FP" != "$EXPECTED_COMPACT" ]; then
