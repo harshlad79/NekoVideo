@@ -1,0 +1,519 @@
+<resources>
+    <string name="app_name" translatable="false">NekoVideo</string>
+
+    <!-- Ações dos botões -->
+    <string name="action_paste_here">Colar Aqui</string>
+    <string name="action_cancel">Cancelar</string>
+    <string name="action_cancel_operation">Cancelar operação</string>
+    <string name="action_unlock">Desbloquear</string>
+    <string name="action_protect">Mover para pasta segura</string>
+    <string name="action_unprivatize">Desprivar</string>
+    <string name="action_privatize">Privar</string>
+    <string name="action_lock_folder">Privar</string>
+    <string name="action_unlock_folder">Desprivar</string>
+    <string name="locking_folder">Trancando pasta...</string>
+    <string name="locking_progress">Trancando... %1$d/%2$d arquivos</string>
+    <string name="unlocking_folder">Destrancando pasta...</string>
+    <string name="unlocking_progress">Destrancando... %1$d/%2$d arquivos</string>
+    <string name="moving_files">Movendo arquivos...</string>
+    <string name="moving_progress">Movendo... %1$d/%2$d arquivos</string>
+    <string name="deleting_items">Excluindo itens...</string>
+    <string name="deleting_progress">Excluindo... %1$d/%2$d itens</string>
+    <string name="folder_locked_success">Pasta trancada com sucesso</string>
+    <string name="folder_unlocked_success">Pasta destrancada com sucesso</string>
+    <string name="enter_password_to_lock">Digite uma senha para trancar a pasta</string>
+    <string name="enter_password_to_unlock">Digite a senha para destrancar</string>
+    <string name="enter_password_to_view">Digite a senha para visualizar</string>
+    <string name="invalid_password_or_corrupted">Senha inválida ou dados corrompidos</string>
+    <string name="locked_folder">Pasta trancada</string>
+    <string name="action_delete">Excluir</string>
+    <string name="action_rename">Renomear</string>
+    <string name="action_move">Mover</string>
+    <string name="action_share">Compartilhar</string>
+    <string name="action_tags">Tags</string>
+    <string name="action_pin_folder">Fixar pasta</string>
+    <string name="action_unpin_folder">Desfixar pasta</string>
+    <string name="pinned_folders_title">Pastas fixadas</string>
+    <string name="pinned_folder_unavailable">Pasta nao encontrada</string>
+    <string name="pin_folder_success">Pasta fixada</string>
+    <string name="unpin_folder_success">Pasta desfixada</string>
+    <string name="unpin_folder_confirm_title">Desfixar pasta?</string>
+    <string name="unpin_folder_confirm_message">Remover \"%1$s\" das pastas fixadas?</string>
+    <string name="pin_folder_already_pinned">Esta pasta ja esta fixada</string>
+    <string name="pin_folder_limit_reached">Limite de pastas fixadas atingido</string>
+    <string name="pin_folder_invalid">Somente pastas existentes podem ser fixadas</string>
+    <string name="share_videos">Compartilhar vídeos</string>
+    <string name="action_shuffle_play">Aleatório</string>
+    <string name="action_create_folder">Nova Pasta</string>
+    <string name="action_settings">Configurações</string>
+    <string name="no_videos_found">Pasta sem vídeos</string>
+    <string name="empty_folder_title">Pasta vazia</string>
+    <string name="empty_folder_message">Nao ha pastas ou videos visiveis aqui no momento.</string>
+    <string name="neko_private_folder_name">Cofre Privado</string>
+    <string name="secure_folders_hidden">Pastas seguras ocultadas</string>
+    <string name="secure_folders_shown">Pastas seguras exibidas</string>
+    <string name="select_private_folders_to_unprivatize">Selecione pastas privadas para desprivar</string>
+    <string name="select_valid_folders_to_privatize">Selecione pastas válidas para privar</string>
+    <string name="unprivatizing_folders">Desprivando pastas...</string>
+    <string name="privatizing_folders">Privando pastas...</string>
+    <string name="unprivatize_title">Desprivar</string>
+    <string name="privatize_title">Privar</string>
+    <string name="move_mode_activated">Modo mover ativado. Navegue até o destino e cole.</string>
+    <string name="move_operation_cancelled">Operação de mover cancelada</string>
+    <string name="items_moved">Itens movidos!</string>
+    <string name="move_destination_title">Mover para...</string>
+    <string name="move_destination_subtitle">Escolha a pasta de destino para %1$d item(s)</string>
+    <string name="move_destination_root">Armazenamento interno</string>
+    <string name="move_destination_no_folders">Nenhuma subpasta disponível aqui</string>
+    <string name="move_destination_confirm">Mover para cá</string>
+    <string name="items_deleted_locked">Itens excluídos!</string>
+    <string name="files_secured">Arquivos protegidos!</string>
+    <string name="folder_created">Pasta criada</string>
+    <string name="action_set_secure_folder">Definir Como Pasta Segura</string>
+    <string name="secure_folder_set">Esta pasta agora é a pasta segura!</string>
+    <string name="pull_to_refresh_tutorial">Arraste para baixo para atualizar vídeos</string>
+
+    <!-- Content descriptions -->
+    <string name="cancel_description">Cancelar</string>
+    <string name="paste_here_description">Colar aqui</string>
+    <string name="actions_description">Ações</string>
+    <string name="options_description">Opções</string>
+
+    <string name="loading">Carregando...</string>
+    <string name="updating_index">Atualizando índice...</string>
+    <string name="indexing_videos">Indexando vídeos...</string>
+    <string name="pull_down_to_scan">Nenhum vídeo compatível foi encontrado nesta pasta</string>
+
+    <string name="searching_cast_devices">Procurando dispositivos de transmissão...</string>
+    <string name="no_cast_devices_found">Nenhum dispositivo de transmissão encontrado</string>
+    <string name="available_devices">Dispositivos disponíveis</string>
+    <string name="refresh">Atualizar</string>
+    <string name="select_cast_device">Selecionar dispositivo de transmissão</string>
+    <string name="cast_playing_on">Reproduzindo em</string>
+    <string name="cast_disconnect_title">Encerrar transmissão?</string>
+    <string name="cast_disconnect_message">A reprodução em %s será interrompida.</string>
+    <string name="cast_disconnect_confirm">Desconectar</string>
+    <string name="cast_notification_channel_name">Controles de Cast</string>
+    <string name="cast_notification_casting_to">Transmitindo para %s</string>
+    <string name="cast_notification_idle">Pronto para transmitir</string>
+    <string name="cast_tracks_info_title">Legendas e áudio no Cast</string>
+    <string name="cast_tracks_info_message">Ao transmitir por DLNA, o NekoVideo envia o vídeo para o dispositivo receptor, mas o controle de legendas e faixas de áudio depende da Smart TV, TV Box ou outro aparelho que está reproduzindo.\n\nSe o vídeo tiver legendas ou mais de uma faixa de áudio, abra as opções de reprodução no próprio dispositivo receptor e verifique se ele detecta essas trilhas para alternar por lá.\n\nNem todos os dispositivos DLNA oferecem suporte para trocar legendas ou áudio durante a transmissão.</string>
+    <string name="previous">Anterior</string>
+    <string name="play">Reproduzir</string>
+    <string name="pause">Pausar</string>
+    <string name="next">Próximo</string>
+    <string name="press_back_again_to_exit">Pressione voltar novamente para sair</string>
+
+    <!-- Premium -->
+    <string name="premium_title">Remover Anúncios</string>
+    <string name="premium_description">Apoie o desenvolvimento e tenha uma experiência sem anúncios!</string>
+    <string name="premium_no_ads">Sem anúncios</string>
+    <string name="premium_support">Apoiar o desenvolvedor</string>
+    <string name="premium_active">Premium Ativo</string>
+    <string name="premium_thanks">Obrigado pelo seu apoio!</string>
+
+    <!-- Bottom sheet headers -->
+    <string name="mode_move_files">Modo: Mover Arquivos</string>
+    <string name="item_actions">Ações dos Itens</string>
+    <string name="options">Opções</string>
+    <string name="navigate_to_destination">Navegue até o destino e cole os arquivos</string>
+
+    <!-- Configurações de Interface --><string name="settings_appearance">Aparência</string>
+    <string name="settings_language">Idioma</string>
+    <string name="settings_dark_mode">Modo Escuro</string>
+    <string name="settings_dark_mode_desc">Claro, escuro ou seguir o sistema</string>
+    <string name="settings_app_language">Idioma do App</string>
+    <string name="settings_app_language_desc">Idioma exibido no aplicativo</string>
+
+    <!-- Rename dialogs -->
+    <string name="rename_item">Renomear item</string>
+    <string name="renaming_item">Renomeando item...</string>
+    <string name="new_name">Novo nome</string>
+    <string name="rename_multiple_items">Renomear múltiplos itens</string>
+    <string name="selected_items_count">%d item(s) selecionado(s)</string>
+    <string name="video_tags_title">Tags dos vídeos</string>
+    <string name="video_tags_empty">Nenhuma tag criada ainda</string>
+    <string name="video_tags_empty_desc">Crie tags para organizar seus vídeos e reutilizar depois no shuffle.</string>
+    <string name="video_tags_create">Criar tag</string>
+    <string name="edit_tag">Editar tag</string>
+    <string name="video_tags_new_label">Nome da tag</string>
+    <string name="video_tags_save">Salvar tags</string>
+    <string name="video_tags_choose">Escolha as tags para adicionar aos vídeos selecionados</string>
+    <string name="video_tags_add_success">Tags atualizadas nos vídeos</string>
+    <string name="video_tags_create_success">Tag criada</string>
+    <string name="video_tags_name_empty">Digite um nome para a tag</string>
+    <string name="video_tags_name_exists">Essa tag já existe</string>
+    <string name="video_tags_none_selected">Selecione pelo menos uma tag</string>
+    <string name="shuffle_tags_title">Shuffle por tags</string>
+    <string name="shuffle_tags_description">Toque na tag para alternar entre usar, ignorar e neutro. Se nenhuma tag estiver marcada para usar, o shuffle considera todos os vídeos e exclui apenas as tags ignoradas.</string>
+    <string name="shuffle_tags_empty">Nenhuma tag criada ainda. Adicione tags aos vídeos primeiro.</string>
+    <string name="shuffle_tags_confirm">Criar shuffle</string>
+    <string name="shuffle_tags_no_match">Nenhum vídeo com as tags selecionadas foi encontrado</string>
+    <string name="shuffle_tags_mode_neutral">Neutro</string>
+    <string name="shuffle_tags_mode_include">Usar no shuffle</string>
+    <string name="shuffle_tags_mode_exclude">Ignorar no shuffle</string>
+    <string name="shuffle_tags_hint_message">Dica: segure em Aleatório para escolher quais tags usar no shuffle.</string>
+
+    <plurals name="video_tags_selected_count">
+        <item quantity="one">%d vídeo selecionado</item>
+        <item quantity="other">%d vídeos selecionados</item>
+    </plurals>
+
+    <!-- Permissões -->
+    <string name="permission_title">Acesso aos Arquivos Necessário</string>
+    <string name="permission_description">Para funcionar corretamente, este aplicativo precisa de acesso a todos os arquivos do dispositivo. Isso permite que você navegue e reproduza seus vídeos.</string>
+    <string name="permission_button">Permitir Acesso aos Arquivos</string>
+    <string name="permission_instructions">Toque no botão acima e ative Permitir acesso para gerenciar todos os arquivos nas configurações do sistema.</string>
+
+    <!-- Pull to Refresh Tutorial -->
+    <string name="pull_to_refresh_title">Arraste para baixo para atualizar</string>
+    <string name="pull_to_refresh_description">Mantenha pressionado e arraste esta área para baixo para atualizar seus vídeos manualmente</string>
+    <string name="updating_videos">Atualizando vídeos...</string>
+    <string name="pull_to_refresh">Puxe para atualizar</string>
+    <string name="release_to_refresh">Solte para atualizar</string>
+    <string name="pull_to_refresh_empty">Clique no ícone para atualizar o índice de vídeos</string>
+
+    <!-- Temas -->
+    <string name="theme_light">Claro</string>
+    <string name="theme_dark">Escuro</string>
+    <string name="theme_system">Seguir Sistema</string>
+
+    <!-- Languages -->
+    <string name="language_system">Seguir Sistema</string>
+    <string name="language_portuguese">Português (Brasil)</string>
+    <string name="language_english">English</string>
+    <string name="language_spanish">Español</string>
+    <string name="language_french">Français</string>
+    <string name="language_german">Deutsch</string>
+    <string name="language_russian">Русский</string>
+    <string name="language_hindi">हिन्दी</string>
+    <string name="language_chinese">简体中文</string>
+    <string name="language_chinese_traditional">繁體中文</string>
+
+    <!-- Settings Screen -->
+    <string name="settings_playback">Reprodução</string>
+    <string name="settings_playback_desc">Controles de playback e comportamento do player</string>
+    <string name="settings_interface">Interface</string>
+    <string name="settings_interface_desc">Tema e idioma do aplicativo</string>
+    <string name="settings_display">Visualização</string>
+    <string name="settings_display_desc">Thumbnails, grid e exibição de informações</string>
+    <string name="settings_files">Arquivos</string>
+    <string name="settings_files_desc">Gerenciamento de pastas e arquivos</string>
+    <string name="settings_performance">Performance</string>
+    <string name="settings_performance_desc">Cache e otimizações de desempenho</string>
+    <string name="settings_storage">Armazenamento e Cache</string>
+    <string name="settings_storage_desc">Gerencie o cache de thumbnails</string>
+    <string name="settings_tags">Tags</string>
+    <string name="settings_tags_desc">Gerencie tags para vídeos normais e privados</string>
+    <string name="settings_about">Sobre</string>
+    <string name="settings_about_desc">Informações do app e suporte</string>
+    <string name="settings_changelog">Changelog (v%1$s)</string>
+    <string name="settings_changelog_desc">Veja o que mudou e como usar as novidades</string>
+    <string name="changelog_title">Changelog</string>
+    <string name="changelog_latest_title">Novidades da v%1$s</string>
+    <string-array name="changelog_item_titles">
+        <item>Novos gestos no player</item>
+        <item>Double tap acumulativo</item>
+        <item>Configurações mais claras</item>
+        <item>Tags e armazenamento refinados</item>
+        <item>Pastas mais responsivas</item>
+    </string-array>
+    <string-array name="changelog_item_descriptions">
+        <item>Agora é possível ajustar volume e brilho arrastando nas laterais da tela durante a reprodução.</item>
+        <item>Toques rápidos para avançar ou voltar agora se acumulam, permitindo pular 10s, 20s, 30s e mais.</item>
+        <item>A tela de configurações recebeu opções condicionais, descrições mais limpas e feedback visual nas ações.</item>
+        <item>O gerenciamento de tags foi redesenhado e a tela de armazenamento agora mostra tamanhos antes da limpeza.</item>
+        <item>A navegação entre pastas foi otimizada e pastas privadas recém-visíveis aparecem com uma animação suave.</item>
+    </string-array>
+    <string name="changelog_pinned_folders_title">Pastas privadas mais rápidas</string>
+    <string name="changelog_pinned_folders_desc">Corrigido um problema que podia causar travamentos ao trocar rapidamente entre vídeos de pastas privadas.</string>
+    <string name="changelog_continue_watching_title">Miniaturas otimizadas</string>
+    <string name="changelog_continue_watching_desc">As miniaturas usadas durante a reprodução foram otimizadas para reduzir carga no dispositivo.</string>
+    <string name="changelog_external_player_title">Playlists grandes mais estáveis</string>
+    <string name="changelog_external_player_desc">Melhorada a estabilidade do player ao navegar por listas com muitos vídeos.</string>
+    <string name="changelog_background_playback_title">Reprodução mais fluida</string>
+    <string name="changelog_background_playback_desc">A atualização das artes do player agora evita trabalho desnecessário quando vídeos são pulados rapidamente.</string>
+    <string name="changelog_dark_theme_title">Ações com mais segurança</string>
+    <string name="changelog_dark_theme_desc">Durante ações como mover, privar, desprivar e excluir, o dialog de processamento não pode mais ser fechado manualmente por toque fora, voltar ou arraste.</string>
+    <string name="changelog_pip_title">Pasta privada especial</string>
+    <string name="changelog_pip_desc">A pasta privada especial da raiz agora mostra apenas a ação de shuffle e esconde ações indevidas como renomear, mover, fixar, privar, desprivar e excluir.</string>
+    <string name="changelog_credits_title">Feedback visual</string>
+    <string name="changelog_credits_desc">O ícone do app na TopBar ganhou uma animação rápida de encolhimento ao toque, deixando a ação de 3 cliques mais perceptível.</string>
+    <string name="settings_security">Segurança e Privacidade</string>
+    <string name="settings_security_desc">Biometria e opções de senha</string>
+    <string name="security_title">Segurança e Privacidade</string>
+    <string name="biometric_section">Biometria</string>
+    <string name="biometric_unlock">Desbloqueio Biométrico</string>
+    <string name="biometric_unlock_desc">Use impressão digital ou rosto para desbloquear pastas privadas</string>
+    <string name="biometric_unlock_title">Desbloquear Pasta Privada</string>
+    <string name="biometric_use_password">Usar senha</string>
+    <string name="biometric_scanning">Aguardando biometria…</string>
+    <string name="biometric_not_available">Biometria não disponível neste dispositivo</string>
+    <string name="biometric_no_password">Defina uma senha de privatização primeiro</string>
+    <string name="biometric_enable_title">Ativar desbloqueio biométrico?</string>
+    <string name="biometric_enable_desc">Use sua biometria para desbloquear pastas privadas sem precisar digitar a senha.</string>
+    <string name="biometric_enable_confirm">Ativar biometria</string>
+    <string name="biometric_enable_prompt_title">Ativar biometria</string>
+    <string name="biometric_enable_prompt_subtitle">Confirme para ativar o desbloqueio biométrico</string>
+    <string name="biometric_enable_cancel">Cancelar</string>
+    <string name="biometric_not_now">Agora não</string>
+    <string name="biometric_enabled_success">Biometria ativada com sucesso!</string>
+    <string name="biometric_disabled">Biometria desativada.</string>
+    <string name="change_password">Trocar Senha</string>
+    <string name="change_password_desc">Atualiza a senha de todas as pastas privadas</string>
+    <string name="change_password_title">Trocar Senha</string>
+    <string name="change_password_step_old">Senha atual</string>
+    <string name="change_password_step_new">Nova senha</string>
+    <string name="change_password_confirm_new">Confirmar nova senha</string>
+    <string name="change_password_next">Próximo</string>
+    <string name="change_password_confirm_btn">Confirmar</string>
+    <string name="change_password_processing">Atualizando pastas privadas…</string>
+    <string name="change_password_success">Senha alterada com sucesso!</string>
+    <string name="change_password_section">Senha</string>
+    <string name="biometric_reactivate_prompt_title">Reativar biometria</string>
+    <string name="biometric_reactivate_prompt_subtitle">Confirme para atualizar o desbloqueio biométrico com a nova senha</string>
+    <string name="biometric_reactivated">Biometria atualizada com sucesso!</string>
+    <string name="biometric_deactivated_reactivate">Biometria desativada. Reative em Segurança e Privacidade.</string>
+    <string name="storage_thumbnails_section">Cache de Thumbnails</string>
+    <string name="storage_clear_thumbnails">Limpar cache de thumbnails</string>
+    <string name="storage_clear_thumbnails_desc">Remove todas as thumbnails salvas em disco. Serão regeradas ao navegar nas pastas</string>
+    <string name="storage_clear_thumbnails_success">Cache de thumbnails limpo com sucesso</string>
+    <string name="storage_clear_continue_watching">Limpar histórico de continuar assistindo</string>
+    <string name="storage_clear_continue_watching_desc">Remove o card do root e os pontos salvos de retomada dos vídeos</string>
+    <string name="storage_clear_continue_watching_success">Histórico de continuar assistindo limpo com sucesso</string>
+    <string name="tags_title">Tags</string>
+    <string name="tags_normal_section">Tags de vídeos normais</string>
+    <string name="tags_private_section">Tags de vídeos privados</string>
+    <string name="tags_private_locked_title">Tags privadas protegidas</string>
+    <string name="tags_private_locked_desc">Desbloqueie com biometria ou senha para ver, criar e remover tags privadas.</string>
+    <string name="tags_private_unlock">Desbloquear tags privadas</string>
+    <string name="tags_private_password_required">Defina uma senha de privatização para gerenciar tags privadas</string>
+    <string name="tags_backup_section">Backup das tags</string>
+    <string name="tags_backup_export">Exportar backup</string>
+    <string name="tags_backup_export_desc">Salvar uma copia manual do backup em qualquer pasta</string>
+    <string name="tags_backup_import">Importar backup</string>
+    <string name="tags_backup_import_desc">Mesclar o backup automatico encontrado no aparelho com as tags atuais</string>
+    <string name="tags_backup_auto_status">Backup automatico salvo em %1$s</string>
+    <string name="tags_backup_auto_status_empty">Nenhum backup automatico salvo ainda</string>
+    <string name="tags_backup_export_success">Backup exportado com sucesso</string>
+    <string name="tags_backup_import_success">Backup importado: %1$d tags novas e %2$d vinculacoes restauradas</string>
+    <string name="tags_backup_action_failed">Nao foi possivel concluir a operacao de backup</string>
+    <string name="tags_create_hint">Criar nova tag</string>
+    <string name="tags_list_title">Lista de tags</string>
+    <string name="tags_count">%1$d tags</string>
+    <string name="tags_empty_scope">Nenhuma tag criada nesta categoria</string>
+    <string name="tags_delete">Excluir tag</string>
+    <string name="tags_delete_confirm_title">Excluir tag?</string>
+    <string name="tags_delete_confirm_message">Excluir "%1$s"? A tag será removida dos vídeos que usam ela.</string>
+
+    <!-- TopAppBar -->
+    <string name="settings_title">Configurações</string>
+    <string name="playback_title">Reprodução</string>
+    <string name="interface_title">Interface</string>
+    <string name="about_title">Sobre</string>
+    <string name="cancel_selection">Cancelar Seleção</string>
+    <string name="back">Voltar</string>
+    <string name="select_all">Selecionar Tudo</string>
+
+    <!-- Playback Settings Screen -->
+    <string name="playback_controls">Controles</string>
+    <string name="playback_features">Funcionalidades</string>
+
+    <string name="playback_background_playback">Reprodução em segundo plano</string>
+    <string name="playback_background_playback_desc">Manter o vídeo tocando ao fechar o player</string>
+    <string name="playback_double_tap_seek">Pulo Duplo Toque</string>
+    <string name="playback_double_tap_seek_desc">Segundos para avançar/voltar</string>
+    <string name="playback_drag_seek">Arrastar para avançar/voltar</string>
+    <string name="playback_drag_seek_desc">Arraste na horizontal com os controles ocultos para pular o vídeo</string>
+    <string name="playback_volume_brightness_gestures">Gestos de volume e brilho</string>
+    <string name="playback_volume_brightness_gestures_desc">Arraste na vertical nas laterais com os controles ocultos para ajustar volume e brilho</string>
+    <string name="playback_keep_screen_on">Manter Tela Ligada</string>
+    <string name="playback_keep_screen_on_desc">Não desligar tela durante reprodução</string>
+    <string name="playback_continue_watching">Continuar Assistindo</string>
+    <string name="playback_continue_watching_enabled">Ativar continuar assistindo</string>
+    <string name="playback_continue_watching_enabled_desc">Salvar onde você parou e permitir retomar depois</string>
+    <string name="playback_continue_watching_min_duration">Duração mínima do vídeo</string>
+    <string name="playback_continue_watching_min_duration_desc">Só salvar progresso para vídeos com pelo menos esse tempo</string>
+    <string name="playback_continue_watching_private">Incluir vídeos privados</string>
+    <string name="playback_continue_watching_private_desc">Também salvar progresso de vídeos em pastas privadas</string>
+    <string name="playback_continue_watching_stopped_at">Parou em %1$s</string>
+
+    <!-- Display Settings Screen -->
+    <string name="display_video_info">Informações dos Vídeos</string>
+    <string name="display_show_thumbnails">Mostrar Miniaturas</string>
+    <string name="display_show_thumbnails_desc">Exibir thumbnails dos vídeos</string>
+    <string name="display_show_durations">Mostrar Durações</string>
+    <string name="display_show_durations_desc">Exibir duração dos vídeos</string>
+    <string name="display_show_file_sizes">Mostrar Tamanhos</string>
+    <string name="display_show_file_sizes_desc">Exibir tamanho dos arquivos</string>
+    <string name="display_layout">Layout</string>
+    <string name="display_grid_columns">Colunas na Grid</string>
+    <string name="display_grid_columns_desc">Número de colunas na lista</string>
+    <string name="display_quality">Qualidade</string>
+    <string name="display_thumbnail_quality">Resolução da Thumbnail</string>
+    <string name="display_thumbnail_quality_desc">Qualidade das miniaturas geradas</string>
+
+    <!-- Quality Options -->
+    <string name="quality_low">Baixa (360p)</string>
+    <string name="quality_medium">Média (720p)</string>
+    <string name="quality_high">Alta (1080p)</string>
+    <string name="quality_original">Original</string>
+
+    <!-- Private folders hint -->
+    <string name="private_folders_hint">Toque 3× no ícone do app no topo para mostrar/ocultar pastas privadas</string>
+
+    <!-- Files Settings Screen -->
+    <string name="files_management">Gerenciamento</string>
+    <string name="files_app_only_folders">Criar pastas privadas</string>
+    <string name="files_app_only_folders_desc">Criar pastas privadas por padrão</string>
+    <string name="files_confirm_delete">Confirmar Exclusão</string>
+    <string name="files_confirm_delete_desc">Pedir confirmação antes de deletar arquivos</string>
+
+    <!-- Performance Settings Screen -->
+    <string name="performance_cache">Cache</string>
+    <string name="performance_thumbnail_cache">Cache de Thumbnails</string>
+    <string name="performance_thumbnail_cache_desc">Espaço reservado para miniaturas</string>
+
+    <!-- About Settings Screen -->
+    <string name="about_information">Informações</string>
+    <string name="about_app_version">Versão do App</string>
+    <string name="about_source_code">Código Fonte</string>
+    <string name="about_source_code_desc">Ver no GitHub</string>
+    <string name="about_report_bug">Relatar Bug</string>
+    <string name="about_report_bug_desc">Relatar problemas ou sugestoes no GitHub; pode ser necessario fazer login</string>
+
+    <!-- Dialogs -->
+    <!-- Rename Dialog -->
+    <string name="rename_files">Renomear Arquivos</string>
+    <string name="renaming_files">Renomeando Arquivos</string>
+    <string name="renaming_progress">Renomeando arquivo %1$d de %2$d</string>
+    <string name="base_name">Nome Base</string>
+    <string name="start_number">Número Inicial</string>
+    <string name="rename">Renomear</string>
+
+    <!-- Create Folder Dialog -->
+    <string name="create_new_folder">Criar Nova Pasta</string>
+    <string name="creating_folder">Criando pasta...</string>
+    <string name="folder_name">Nome da Pasta</string>
+    <string name="folder_name_empty_error">Nome da pasta não pode estar vazio</string>
+    <string name="create">Criar</string>
+
+    <!-- Password Dialog -->
+    <string name="set_secure_password">Definir Senha da Pasta Segura</string>
+    <string name="enter_password">Digite a Senha</string>
+    <string name="processing">Processando...</string>
+    <string name="password">Senha</string>
+    <string name="confirm_password">Confirmar Senha</string>
+    <string name="password_empty_error">Senha não pode estar vazia</string>
+    <string name="passwords_no_match_error">Senhas não coincidem</string>
+    <string name="invalid_password_error">Senha inválida</string>
+    <string name="set_password">Definir Senha</string>
+    <string name="verify">Verificar</string>
+
+    <!-- Delete Confirmation Dialog -->
+    <string name="confirm_deletion">Confirmar Exclusão</string>
+    <string name="delete_confirmation_message">Tem certeza que deseja excluir %d item(s)? Esta ação não pode ser desfeita.</string>
+    <string name="delete">Excluir</string>
+
+    <!-- Common -->
+    <string name="cancel">Cancelar</string>
+    <string name="no_items_selected">Nenhum item selecionado</string>
+
+    <!-- Sort Options -->
+    <string name="sort_name_asc">Nome A-Z</string>
+    <string name="sort_name_desc">Nome Z-A</string>
+    <string name="sort_date_newest">Mais Recente</string>
+    <string name="sort_date_oldest">Mais Antigo</string>
+    <string name="sort_size_largest">Maior</string>
+    <string name="sort_size_smallest">Menor</string>
+
+    <!-- Player Delete Dialog -->
+    <string name="delete_video">Excluir Vídeo</string>
+    <string name="delete_video_confirmation">Tem certeza que deseja excluir \"%1$s\"?\n\nEsta ação não pode ser desfeita.</string>
+    <string name="delete_no_items_selected">Nenhum item selecionado</string>
+    <string name="delete_item_not_found">Item não encontrado: %1$s</string>
+    <string name="delete_item_failed">Falha ao excluir %1$s</string>
+    <string name="delete_item_error">Erro ao excluir %1$s: %2$s</string>
+    <string name="delete_no_items_deleted">Nenhum item foi excluído</string>
+    <string name="delete_items_success">%1$d item(ns) excluído(s)</string>
+    <string name="delete_secure_items_invalid_folder">Alguns itens não estão na pasta segura</string>
+    <string name="delete_secure_item_failed">Falha ao excluir item seguro %1$s</string>
+    <string name="delete_secure_item_error">Erro ao excluir item seguro %1$s: %2$s</string>
+    <string name="delete_no_secure_items_deleted">Nenhum item seguro foi excluído</string>
+    <string name="delete_secure_items_success">%1$d item(ns) seguros excluído(s)</string>
+    <string name="delete_items_error_generic">Erro ao excluir itens</string>
+    <string name="video_delete_success">Vídeo excluído com sucesso</string>
+    <string name="video_delete_failed">Falha ao excluir vídeo</string>
+    <string name="video_delete_error">Erro ao excluir vídeo: %1$s</string>
+
+    <!-- Player Speed Dialog -->
+    <string name="playback_speed_title">Velocidade de Reprodução</string>
+    <string name="close">Fechar</string>
+
+    <!-- Track Selection Dialog -->
+    <string name="tracks_title">Faixas</string>
+    <string name="tab_subtitles">Legendas</string>
+    <string name="tab_audio">Áudio</string>
+    <string name="subtitle_file_select">Selecionar arquivo de legenda</string>
+    <string name="subtitle_file_video_section">Legendas no video</string>
+    <string name="subtitle_size_title">Tamanho da legenda</string>
+    <string name="subtitle_size_small">Pequeno</string>
+    <string name="subtitle_size_medium">Medio</string>
+    <string name="subtitle_size_large">Grande</string>
+    <string name="subtitles_off">Desativado</string>
+    <string name="no_tracks_available">Nenhuma faixa disponível</string>
+
+    <!-- Fix Video Metadata Dialog -->
+
+    <!-- ADICIONAR plurals corretos -->
+    <plurals name="items_selected">
+        <item quantity="one">%d item selecionado</item>
+        <item quantity="other">%d itens selecionados</item>
+    </plurals>
+
+        <!-- Plurals para contagem de itens -->
+        <plurals name="move_items_count">
+            <item quantity="one">Mover %d item</item>
+            <item quantity="other">Mover %d itens</item>
+        </plurals>
+
+        <plurals name="moving_items_status">
+            <item quantity="one">Movendo %d item</item>
+            <item quantity="other">Movendo %d itens</item>
+        </plurals>
+
+    <string name="video_not_found_title">Vídeo não encontrado</string>
+    <string name="video_not_found_message">O vídeo "%1$s" não foi localizado. Atualize os vídeos para tentar localizá-lo novamente.</string>
+    <string name="video_not_found_action_refresh">Atualizar vídeos</string>
+    <string name="player_more_actions">Mais ações</string>
+    <string name="player_picture_in_picture">Picture in Picture</string>
+    <string name="player_cast">Cast</string>
+    <string name="player_casting">Transmitindo</string>
+    <string name="player_sleep_timer">Sleep Timer</string>
+    <string name="player_sleep_timer_active_title">Sleep Timer ativo</string>
+    <string name="player_sleep_timer_active_content_description">Sleep Timer ativo</string>
+    <string name="player_sleep_timer_start">Iniciar</string>
+    <string name="player_sleep_timer_cancel_prompt">Deseja cancelar o sleep timer?</string>
+    <string name="player_sleep_timer_cancel_action">Cancelar timer</string>
+    <string name="player_sleep_timer_remaining">Tempo restante: %1$s</string>
+    <string name="player_sleep_timer_minutes_value">%1$d min</string>
+    <string name="player_sleep_timer_hours_minutes_value">%1$dh %2$dmin</string>
+    <string name="player_sleep_timer_hours_value">%1$dh</string>
+    <string name="player_sleep_timer_only_minutes_value">%1$dmin</string>
+    <string name="player_back">Voltar</string>
+    <string name="player_previous">Anterior</string>
+    <string name="player_pause">Pausar</string>
+    <string name="player_play">Reproduzir</string>
+    <string name="player_next">Próximo</string>
+    <string name="player_subtitles">Legendas</string>
+    <string name="player_rotation_auto">Rotação automática</string>
+    <string name="player_rotation_portrait">Bloquear em retrato</string>
+    <string name="player_rotation_landscape">Bloquear em paisagem</string>
+    <string name="player_repeat_normal">Reprodução normal</string>
+    <string name="player_repeat_all">Repetir playlist</string>
+    <string name="player_repeat_one">Repetir um vídeo</string>
+    <string name="player_seek_forward">Avançar</string>
+    <string name="player_seek_backward">Retroceder</string>
+    <string name="player_audio_track_number">Áudio %1$d</string>
+    <string name="player_track_number">Faixa %1$d</string>
+</resources>
