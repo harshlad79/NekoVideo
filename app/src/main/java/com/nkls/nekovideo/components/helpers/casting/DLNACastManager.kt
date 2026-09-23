@@ -260,7 +260,7 @@ class DLNACastManager(private val context: Context) {
                     val transportState = getTransportState()
                     isPlaying = transportState == "PLAYING"
                     if (transportState != lastTransportState) {
-                        trace("TV transport state ${lastTransportState ?: \"<initial>\"} -> $transportState")
+                        trace("TV transport state ${lastTransportState ?: "<initial>"} -> $transportState")
                         lastTransportState = transportState
                     }
 
