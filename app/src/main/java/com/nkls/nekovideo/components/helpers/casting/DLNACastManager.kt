@@ -88,6 +88,8 @@ class DLNACastManager(private val context: Context) {
     @Volatile private var desiredPositionExplicit = false
     @Volatile private var latestActiveSeekVersion = 0L
     @Volatile private var activeSeekInProgress = false
+    @Volatile private var pauseSyncInProgress = false
+    @Volatile private var pauseSyncJob: Job? = null
     private var confirmedVideoPath = ""
     private var confirmedVideoUrl = ""
 
@@ -308,13 +310,13 @@ class DLNACastManager(private val context: Context) {
             var lastTransportState: String? = null
             while (isConnected) {
                 try {
-                    val canQueryRenderer = !activeSeekInProgress &&
+                    val canQueryRenderer = !activeSeekInProgress && !pauseSyncInProgress &&
                         (controlState == CastControlState.READY_PLAYING ||
                             controlState == CastControlState.READY_PAUSED)
 
                     if (canQueryRenderer) {
                         val pos = getPositionInfo()
-                        val canApplyPosition = !activeSeekInProgress &&
+                        val canApplyPosition = !activeSeekInProgress && !pauseSyncInProgress &&
                             (controlState == CastControlState.READY_PLAYING ||
                                 controlState == CastControlState.READY_PAUSED)
                         if (pos != null && canApplyPosition) {
@@ -331,7 +333,7 @@ class DLNACastManager(private val context: Context) {
                             lastTransportState = transportState
                         }
 
-                        val canApplyTransport = !activeSeekInProgress &&
+                        val canApplyTransport = !activeSeekInProgress && !pauseSyncInProgress &&
                             (controlState == CastControlState.READY_PLAYING ||
                                 controlState == CastControlState.READY_PAUSED)
                         if (canApplyTransport) {
@@ -693,6 +695,13 @@ class DLNACastManager(private val context: Context) {
         trace("CAST 3 loadAndPlay entered generation=${request.generation} title=${request.videoTitle}")
         val device = connectedDevice ?: return
 
+        val pendingPause = pauseSyncJob
+        if (pendingPause?.isActive == true) {
+            trace("CAST wait background pause before media switch generation=${request.generation}")
+            pendingPause.join()
+            if (!isCurrentRequest(request)) return
+        }
+
         try {
             val url = videoUrlFor(request.videoPath)
             trace("CAST 4 URL ready generation=${request.generation} url=$url")
@@ -851,6 +860,7 @@ class DLNACastManager(private val context: Context) {
                     }
                     return
                 }
+                val seekAcceptedAtMs = System.currentTimeMillis()
 
                 snapshot = waitForExpectedPlayback(
                     request = request,
@@ -858,7 +868,8 @@ class DLNACastManager(private val context: Context) {
                     timeoutMs = 15_000,
                     graceMs = 10_000,
                     reason = "after-start-seek",
-                    expectedPositionMs = targetPosition
+                    expectedPositionMs = targetPosition,
+                    expectedPositionAcceptedAtMs = seekAcceptedAtMs
                 ) ?: run {
                     if (isCurrentRequest(request)) markRequestError(request)
                     return
@@ -954,7 +965,8 @@ class DLNACastManager(private val context: Context) {
         timeoutMs: Long,
         graceMs: Long = 0L,
         reason: String,
-        expectedPositionMs: Long? = null
+        expectedPositionMs: Long? = null,
+        expectedPositionAcceptedAtMs: Long? = null
     ): RendererSnapshot? {
         var deadline = System.currentTimeMillis() + timeoutMs
         var graceUsed = false
@@ -979,7 +991,11 @@ class DLNACastManager(private val context: Context) {
 
             val uriMatches = currentUri.isNullOrBlank() || mediaUrisMatch(currentUri, expectedUrl)
             val positionMatches = expectedPositionMs == null ||
-                (pos != null && kotlin.math.abs(pos.first - expectedPositionMs) <= 3_000L)
+                (pos != null && if (expectedPositionAcceptedAtMs != null) {
+                    activeSeekPositionMatches(pos.first, expectedPositionMs, expectedPositionAcceptedAtMs)
+                } else {
+                    kotlin.math.abs(pos.first - expectedPositionMs) <= 3_000L
+                })
 
             if (uriMatches && state == "PLAYING" && pos != null && pos.second > 0L && positionMatches) {
                 return RendererSnapshot(state, pos.first, pos.second)
@@ -995,7 +1011,11 @@ class DLNACastManager(private val context: Context) {
 
                 val finalUriMatches = finalUri.isNullOrBlank() || mediaUrisMatch(finalUri, expectedUrl)
                 val finalPositionMatches = expectedPositionMs == null ||
-                    (finalPos != null && kotlin.math.abs(finalPos.first - expectedPositionMs) <= 3_000L)
+                    (finalPos != null && if (expectedPositionAcceptedAtMs != null) {
+                        activeSeekPositionMatches(finalPos.first, expectedPositionMs, expectedPositionAcceptedAtMs)
+                    } else {
+                        kotlin.math.abs(finalPos.first - expectedPositionMs) <= 3_000L
+                    })
 
                 if (finalUriMatches && finalState == "PLAYING" &&
                     finalPos != null && finalPos.second > 0L && finalPositionMatches) {
@@ -1141,6 +1161,11 @@ class DLNACastManager(private val context: Context) {
                 controlState = CastControlState.PREPARING
                 notifyStateChangedAsync()
                 scope.launch {
+                    val pendingPause = pauseSyncJob
+                    if (pendingPause?.isActive == true) {
+                        trace("CAST resume waits for background pause")
+                        pendingPause.join()
+                    }
                     val result = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
                     if (!result.isSuccess) {
                         showCastError("Play", result)
@@ -1159,21 +1184,54 @@ class DLNACastManager(private val context: Context) {
     fun pause() {
         if (controlState != CastControlState.READY_PLAYING) return
         val device = connectedDevice ?: return
+        val pauseGeneration = latestRequestGeneration
+
+        activeSeekInProgress = false
+        nextActiveSeekVersion()
         isPlaying = false
         isLoadingTrack = true
-        controlState = CastControlState.PREPARING
+        controlState = CastControlState.READY_PAUSED
+        pauseSyncInProgress = true
+        trace("CAST pause optimistic generation=$pauseGeneration")
         notifyStateChangedAsync()
-        scope.launch {
-            val result = sendSoapCommand(device.controlUrl, "Pause", "")
-            if (!result.isSuccess) {
-                showCastError("Pause", result)
-                isLoadingTrack = false
-                controlState = CastControlState.ERROR
+
+        val job = scope.launch {
+            try {
+                val result = sendSoapCommand(device.controlUrl, "Pause", "")
+                if (!result.isSuccess) {
+                    showCastError("Pause", result)
+                    if (pauseGeneration == latestRequestGeneration &&
+                        controlState == CastControlState.READY_PAUSED) {
+                        isPlaying = true
+                        controlState = CastControlState.READY_PLAYING
+                    }
+                    return@launch
+                }
+
+                val settled = waitForTransportState(
+                    expected = setOf("PAUSED_PLAYBACK"),
+                    timeoutMs = 5_000,
+                    reason = "pause-background",
+                    generation = pauseGeneration
+                )
+
+                if (pauseGeneration == latestRequestGeneration &&
+                    controlState == CastControlState.READY_PAUSED &&
+                    settled != "PAUSED_PLAYBACK" &&
+                    settled == "PLAYING") {
+                    isPlaying = true
+                    controlState = CastControlState.READY_PLAYING
+                }
+            } finally {
+                pauseSyncInProgress = false
+                if (pauseGeneration == latestRequestGeneration &&
+                    controlState == CastControlState.READY_PAUSED) {
+                    isLoadingTrack = false
+                }
                 notifyStateChanged()
-                return@launch
             }
-            confirmCurrentMediaState("pause")
         }
+        pauseSyncJob = job
     }
 
     fun seekTo(posMs: Long) {
@@ -1208,9 +1266,9 @@ class DLNACastManager(private val context: Context) {
                 desiredPositionExplicit = true
                 val seekVersion = nextActiveSeekVersion()
                 activeSeekInProgress = true
-                isPlaying = false
+                isPlaying = true
                 isLoadingTrack = true
-                controlState = CastControlState.PREPARING
+                controlState = CastControlState.READY_PLAYING
                 currentPositionMs = bounded
                 trace("CAST active seek start version=$seekVersion target=${msToTimeString(bounded)}")
                 notifyStateChangedAsync()
@@ -1356,7 +1414,7 @@ class DLNACastManager(private val context: Context) {
     ): Boolean {
         val elapsedMs = (System.currentTimeMillis() - seekAcceptedAtMs).coerceAtLeast(0L)
         val minExpected = (targetMs - 3_000L).coerceAtLeast(0L)
-        val maxExpected = targetMs + elapsedMs + 4_000L
+        val maxExpected = targetMs + elapsedMs + 8_000L
         return positionMs in minExpected..maxExpected
     }
 
