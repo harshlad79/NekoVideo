@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.wifi.WifiManager
 import android.util.Log
+import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.*
 import java.io.File
 import java.net.*
@@ -270,7 +271,7 @@ class DLNACastManager(private val context: Context) {
         playlist = listOf(videoPath)
         playlistTitles = listOf(videoTitle)
         currentIndex = 0
-        prepareServer()
+        if (!prepareServer()) return
         loadAndPlay(videoPath, videoTitle)
     }
 
@@ -278,17 +279,26 @@ class DLNACastManager(private val context: Context) {
         playlist = videosPaths
         playlistTitles = videosTitles
         currentIndex = startIndex
-        prepareServer()
+        if (!prepareServer()) return
         val path = videosPaths.getOrElse(startIndex) { return }
         val title = videosTitles.getOrElse(startIndex) { File(path.removePrefix("file://")).nameWithoutExtension }
         loadAndPlay(path, title)
     }
 
-    private fun prepareServer() {
-        if (videoServer == null) {
-            videoServer = LocalVideoServer(context, 8080).also { it.start() }
+    private fun prepareServer(): Boolean {
+        val server = videoServer ?: try {
+            LocalVideoServer(context, 8080).also {
+                it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+                videoServer = it
+                Log.d(tag, "Local video server started on port 8080")
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to start local video server on port 8080", e)
+            videoServer = null
+            return false
         }
-        videoServer!!.clearVideos()
+
+        server.clearVideos()
 
         playlist.forEach { path ->
             if (path.startsWith("locked://")) {
@@ -297,14 +307,15 @@ class DLNACastManager(private val context: Context) {
                 val obfuscatedName = File(filePath).name
                 val originalName = LockedPlaybackSession.getOriginalName(obfuscatedName) ?: obfuscatedName
                 if (xorKey != null) {
-                    videoServer!!.addLockedVideo(filePath, xorKey, originalName)
+                    server.addLockedVideo(filePath, xorKey, originalName)
                 } else {
-                    videoServer!!.addVideo(filePath)
+                    server.addVideo(filePath)
                 }
             } else {
-                videoServer!!.addVideo(path.removePrefix("file://"))
+                server.addVideo(path.removePrefix("file://"))
             }
         }
+        return true
     }
 
     private fun videoUrlFor(videoPath: String): String {
