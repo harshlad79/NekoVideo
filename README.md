@@ -8,6 +8,8 @@
 
 NekoVideo is an open-source local video player for Android built with Kotlin and Jetpack Compose.
 
+> **Fork status:** This repository is a modified fork of [FellipitoPV/NekoVideo](https://github.com/FellipitoPV/NekoVideo). The current fork is being used to develop and test improved DLNA/UPnP compatibility, with an initial focus on reliable playback and transport controls on Samsung DLNA renderers. Changes made in this fork remain licensed under GPL-3.0.
+
 The app focuses on local playback, folder-based organization, private folders, tag-based organization, and DLNA casting without depending on proprietary cast SDKs.
 
 ## Highlights
