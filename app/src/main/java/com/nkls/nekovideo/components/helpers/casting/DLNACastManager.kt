@@ -11,6 +11,7 @@ import android.widget.Toast
 import com.nkls.nekovideo.DebugTraceLogger
 import fi.iki.elonen.NanoHTTPD
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.io.File
 import java.net.*
 import java.nio.ByteBuffer
@@ -53,9 +54,45 @@ class DLNACastManager(private val context: Context) {
             get() = httpStatus != null && httpStatus in 200..299 && errorCode == null
     }
 
+    enum class CastControlState {
+        DISCONNECTED,
+        IDLE,
+        PREPARING,
+        READY_PLAYING,
+        READY_PAUSED,
+        BROWSING,
+        ERROR
+    }
+
+    private data class CastRequest(
+        val generation: Long,
+        val videoPath: String,
+        val videoTitle: String,
+        val startPositionMs: Long,
+        val seekOnStart: Boolean
+    )
+
+    private data class RendererSnapshot(
+        val state: String,
+        val positionMs: Long,
+        val durationMs: Long
+    )
+
     private var videoServer: LocalVideoServer? = null
     private var connectedDevice: DLNADevice? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val castRequests = Channel<CastRequest>(Channel.CONFLATED)
+    @Volatile private var latestRequestGeneration = 0L
+    @Volatile private var desiredPositionMs = 0L
+    @Volatile private var desiredPositionExplicit = false
+    private var confirmedVideoPath = ""
+    private var confirmedVideoUrl = ""
+
+    private val castWorkerJob = scope.launch {
+        for (request in castRequests) {
+            processCastRequest(request)
+        }
+    }
 
     // Playlist state
     private var playlist = listOf<String>()
@@ -75,6 +112,8 @@ class DLNACastManager(private val context: Context) {
     var currentTitle = ""
         private set
     var currentVideoPath = ""
+        private set
+    var controlState = CastControlState.DISCONNECTED
         private set
 
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
@@ -239,6 +278,7 @@ class DLNACastManager(private val context: Context) {
     fun connectToDevice(device: DLNADevice) {
         connectedDevice = device
         isConnected = true
+        controlState = CastControlState.IDLE
         connectionListener?.invoke(true)
         onConnectionStateChanged?.invoke(true)
         context.startService(Intent(context, com.nkls.nekovideo.DLNACastService::class.java))
@@ -251,34 +291,41 @@ class DLNACastManager(private val context: Context) {
             var lastTransportState: String? = null
             while (isConnected) {
                 try {
-                    val pos = getPositionInfo()
-                    if (pos != null) {
-                        currentPositionMs = pos.first
-                        durationMs = pos.second
+                    val canReflectRenderer = controlState == CastControlState.READY_PLAYING ||
+                        controlState == CastControlState.READY_PAUSED
+
+                    if (canReflectRenderer) {
+                        val pos = getPositionInfo()
+                        if (pos != null) {
+                            currentPositionMs = pos.first
+                            durationMs = pos.second
+                        }
                     }
 
                     val transportState = getTransportStateOrNull()
                     if (transportState != null) {
-                        isPlaying = transportState == "PLAYING"
+                        val rendererIsPlaying = transportState == "PLAYING"
                         if (transportState != lastTransportState) {
                             trace("TV transport state ${lastTransportState ?: "<initial>"} -> $transportState")
                             lastTransportState = transportState
                         }
 
-                        // Auto-advance when video ends naturally (PLAYING → STOPPED/NO_MEDIA_PRESENT)
-                        // Guard isLoadingTrack: Smart TVs briefly enter STOPPED during SetAVTransportURI
-                        // which would otherwise trigger a spurious next() and skip the intended video.
-                        if (wasPlaying && !isPlaying && !stoppedByUser && !isLoadingTrack && playlist.size > 1
-                            && transportState != "PAUSED_PLAYBACK") {
+                        if (canReflectRenderer) {
+                            isPlaying = rendererIsPlaying
+                            when (transportState) {
+                                "PLAYING" -> controlState = CastControlState.READY_PLAYING
+                                "PAUSED_PLAYBACK" -> controlState = CastControlState.READY_PAUSED
+                            }
+                        }
+
+                        if (wasPlaying && !rendererIsPlaying && !stoppedByUser && !isLoadingTrack &&
+                            playlist.size > 1 && transportState != "PAUSED_PLAYBACK") {
                             withContext(Dispatchers.Main) { next() }
                         }
 
-                        wasPlaying = isPlaying
+                        wasPlaying = rendererIsPlaying
                     }
-                    withContext(Dispatchers.Main) {
-                        onStateChanged?.invoke()
-                        onServiceStateChanged?.invoke()
-                    }
+                    notifyStateChanged()
                 } catch (_: Exception) {
                 }
                 delay(500)
@@ -309,34 +356,35 @@ class DLNACastManager(private val context: Context) {
     }
 
     private fun prepareServer(): Boolean {
-        val server = videoServer ?: try {
+        if (videoServer != null) return true
+        return try {
             LocalVideoServer(context, 8080).also {
                 it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
                 videoServer = it
                 Log.d(tag, "Local video server started on port 8080")
             }
+            true
         } catch (e: Exception) {
             Log.e(tag, "Failed to start local video server on port 8080", e)
             videoServer = null
-            return false
+            false
         }
+    }
 
-        server.clearVideos()
-
-        playlist.forEach { path ->
-            if (path.startsWith("locked://")) {
-                val filePath = path.removePrefix("locked://")
-                val xorKey = LockedPlaybackSession.getXorKeyForFile(filePath)
-                val obfuscatedName = File(filePath).name
-                val originalName = LockedPlaybackSession.getOriginalName(obfuscatedName) ?: obfuscatedName
-                if (xorKey != null) {
-                    server.addLockedVideo(filePath, xorKey, originalName)
-                } else {
-                    server.addVideo(filePath)
-                }
+    private fun registerVideoWithServer(videoPath: String): Boolean {
+        val server = videoServer ?: return false
+        if (videoPath.startsWith("locked://")) {
+            val filePath = videoPath.removePrefix("locked://")
+            val xorKey = LockedPlaybackSession.getXorKeyForFile(filePath)
+            val obfuscatedName = File(filePath).name
+            val originalName = LockedPlaybackSession.getOriginalName(obfuscatedName) ?: obfuscatedName
+            if (xorKey != null) {
+                server.addLockedVideo(filePath, xorKey, originalName)
             } else {
-                server.addVideo(path.removePrefix("file://"))
+                server.addVideo(filePath)
             }
+        } else {
+            server.addVideo(videoPath.removePrefix("file://"))
         }
         return true
     }
@@ -542,116 +590,330 @@ class DLNACastManager(private val context: Context) {
         return didl.escapeXml()
     }
 
-    private fun loadAndPlay(videoPath: String, videoTitle: String) {
-        trace("CAST 3 loadAndPlay entered title=$videoTitle")
-        val device = connectedDevice ?: return
+    @Synchronized
+    private fun nextRequestGeneration(): Long {
+        latestRequestGeneration += 1
+        return latestRequestGeneration
+    }
+
+    private fun isCurrentRequest(request: CastRequest): Boolean =
+        request.generation == latestRequestGeneration
+
+    private fun notifyStateChangedAsync() {
+        scope.launch { notifyStateChanged() }
+    }
+
+    private suspend fun notifyStateChanged() {
+        withContext(Dispatchers.Main) {
+            onStateChanged?.invoke()
+            onServiceStateChanged?.invoke()
+        }
+    }
+
+    private fun loadAndPlay(
+        videoPath: String,
+        videoTitle: String,
+        startPositionMs: Long = 0L,
+        seekOnStart: Boolean = false
+    ) {
+        val generation = nextRequestGeneration()
+        val initialPosition = startPositionMs.coerceAtLeast(0L)
+        desiredPositionMs = initialPosition
+        desiredPositionExplicit = seekOnStart
+
         currentTitle = videoTitle
         currentVideoPath = videoPath
+        currentPositionMs = initialPosition
+        durationMs = 0L
         stoppedByUser = false
         isPlaying = false
         isLoadingTrack = true
-        scope.launch {
-            try {
-                val url = videoUrlFor(videoPath)
-                trace("CAST 4 URL ready url=$url")
-                val mime = mimeTypeFor(videoPath)
-                trace("CAST 5 probeMedia START mime=$mime")
-                val mediaInfo = probeMedia(videoPath)
-                trace(
-                    "CAST 6 probeMedia END video=${mediaInfo.videoMime} audio=${mediaInfo.audioMime} " +
-                        "audioProfile=${mediaInfo.audioProfile} channels=${mediaInfo.audioChannelCount} " +
-                        "sampleRate=${mediaInfo.audioSampleRate} bitrate=${mediaInfo.audioBitrate}"
+        controlState = CastControlState.PREPARING
+
+        trace("CAST queue generation=$generation title=$videoTitle")
+        notifyStateChangedAsync()
+
+        val result = castRequests.trySend(
+            CastRequest(
+                generation = generation,
+                videoPath = videoPath,
+                videoTitle = videoTitle,
+                startPositionMs = initialPosition,
+                seekOnStart = seekOnStart
+            )
+        )
+        if (result.isFailure) {
+            trace("CAST queue failed generation=$generation")
+            if (generation == latestRequestGeneration) {
+                isLoadingTrack = false
+                controlState = CastControlState.ERROR
+                notifyStateChangedAsync()
+            }
+        }
+    }
+
+    private suspend fun processCastRequest(request: CastRequest) {
+        if (!isCurrentRequest(request)) {
+            trace("CAST drop superseded generation=${request.generation}")
+            return
+        }
+
+        trace("CAST 3 loadAndPlay entered generation=${request.generation} title=${request.videoTitle}")
+        val device = connectedDevice ?: return
+
+        try {
+            val url = videoUrlFor(request.videoPath)
+            trace("CAST 4 URL ready generation=${request.generation} url=$url")
+            val mime = mimeTypeFor(request.videoPath)
+            trace("CAST 5 probeMedia START generation=${request.generation} mime=$mime")
+            val mediaInfo = probeMedia(request.videoPath)
+            trace(
+                "CAST 6 probeMedia END generation=${request.generation} video=${mediaInfo.videoMime} " +
+                    "audio=${mediaInfo.audioMime} audioProfile=${mediaInfo.audioProfile} " +
+                    "channels=${mediaInfo.audioChannelCount} sampleRate=${mediaInfo.audioSampleRate} " +
+                    "bitrate=${mediaInfo.audioBitrate}"
+            )
+
+            if (!isCurrentRequest(request)) {
+                trace("CAST superseded after probe generation=${request.generation}")
+                return
+            }
+
+            durationMs = mediaInfo.durationMs ?: 0L
+            val upperBound = durationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
+            currentPositionMs = desiredPositionMs.coerceIn(0L, upperBound)
+            notifyStateChanged()
+
+            val metadata = buildDIDLMetadata(request.videoTitle, url, mime, mediaInfo)
+            trace("CAST 7 DIDL ready generation=${request.generation}")
+
+            stopTransportForMediaSwitch(
+                controlUrl = device.controlUrl,
+                reason = "before-set-uri",
+                generation = request.generation
+            )
+            if (!isCurrentRequest(request)) {
+                trace("CAST superseded after stop generation=${request.generation}")
+                return
+            }
+
+            if (!registerVideoWithServer(request.videoPath)) {
+                trace("CAST server registration failed generation=${request.generation}")
+                markRequestError(request)
+                return
+            }
+
+            trace("CAST 8 SetAVTransportURI START generation=${request.generation}")
+            var setUriResult = sendSoapCommand(
+                device.controlUrl,
+                "SetAVTransportURI",
+                "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
+            )
+
+            if (!setUriResult.isSuccess && setUriResult.errorCode == "705" && isCurrentRequest(request)) {
+                trace("CAST SetAVTransportURI returned 705; stopping transport and retrying once")
+                stopTransportForMediaSwitch(
+                    controlUrl = device.controlUrl,
+                    reason = "705-retry",
+                    generation = request.generation
                 )
-                val metadata = buildDIDLMetadata(videoTitle, url, mime, mediaInfo)
-                trace("CAST 7 DIDL ready")
-
-                stopTransportForMediaSwitch(device.controlUrl, "before-set-uri")
-
-                trace("CAST 8 SetAVTransportURI START")
-                var setUriResult = sendSoapCommand(
+                if (!isCurrentRequest(request)) return
+                setUriResult = sendSoapCommand(
                     device.controlUrl,
                     "SetAVTransportURI",
                     "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
                 )
+            }
 
-                if (!setUriResult.isSuccess && setUriResult.errorCode == "705") {
-                    trace("CAST SetAVTransportURI returned 705; stopping transport and retrying once")
-                    stopTransportForMediaSwitch(device.controlUrl, "705-retry")
-                    setUriResult = sendSoapCommand(
-                        device.controlUrl,
-                        "SetAVTransportURI",
-                        "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
-                    )
-                }
-
-                trace("CAST 9 SetAVTransportURI END success=${setUriResult.isSuccess}")
-                if (!setUriResult.isSuccess) {
+            trace("CAST 9 SetAVTransportURI END generation=${request.generation} success=${setUriResult.isSuccess}")
+            if (!setUriResult.isSuccess) {
+                if (isCurrentRequest(request)) {
                     showCastError("SetAVTransportURI", setUriResult)
-                    return@launch
+                    markRequestError(request)
                 }
+                return
+            }
+            if (!isCurrentRequest(request)) {
+                trace("CAST superseded after SetAVTransportURI generation=${request.generation}")
+                return
+            }
 
-                var state = getTransportStateOrNull()
-                if (state == "TRANSITIONING") {
-                    state = waitForTransportState(
-                        expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
-                        timeoutMs = 15_000,
-                        reason = "after-set-uri"
-                    )
-                }
-                trace("CAST post-URI state=${state ?: "unknown"}")
+            var state = getTransportStateOrNull()
+            if (state == "TRANSITIONING") {
+                state = waitForTransportState(
+                    expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
+                    timeoutMs = 15_000,
+                    reason = "after-set-uri",
+                    generation = request.generation
+                )
+            }
+            if (!isCurrentRequest(request)) return
+            trace("CAST post-URI generation=${request.generation} state=${state ?: "unknown"}")
 
-                if (state == "PLAYING") {
-                    trace("CAST Play skipped: renderer already PLAYING")
-                    return@launch
-                }
-
-                trace("CAST 10 Play START")
+            if (state != "PLAYING") {
+                trace("CAST 10 Play START generation=${request.generation}")
                 var playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
 
-                if (!playResult.isSuccess && playResult.errorCode == "701") {
+                if (!playResult.isSuccess && playResult.errorCode == "701" && isCurrentRequest(request)) {
                     val current = getTransportStateOrNull()
                     if (current == "TRANSITIONING") {
                         val settled = waitForTransportState(
                             expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
                             timeoutMs = 15_000,
-                            reason = "play-701"
+                            reason = "play-701",
+                            generation = request.generation
                         )
                         if (settled == "PLAYING") {
                             trace("CAST Play 701 ignored: renderer reached PLAYING on its own")
-                            return@launch
-                        }
-                        if (settled == "STOPPED" || settled == "PAUSED_PLAYBACK") {
+                            playResult = SoapResult(httpStatus = 200)
+                        } else if (settled == "STOPPED" || settled == "PAUSED_PLAYBACK") {
                             trace("CAST Play retry after 701 state=$settled")
                             playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
                         }
                     }
                 }
 
-                trace("CAST 11 Play END success=${playResult.isSuccess}")
+                trace("CAST 11 Play END generation=${request.generation} success=${playResult.isSuccess}")
                 if (!playResult.isSuccess) {
-                    showCastError("Play", playResult)
-                    return@launch
+                    if (isCurrentRequest(request)) {
+                        showCastError("Play", playResult)
+                        markRequestError(request)
+                    }
+                    return
                 }
+            } else {
+                trace("CAST Play skipped: renderer already PLAYING")
+            }
 
-                val playingState = waitForTransportState(
-                    expected = setOf("PLAYING"),
-                    timeoutMs = 15_000,
-                    reason = "after-play"
-                )
-                if (playingState != "PLAYING") {
-                    trace("CAST warning: Play returned success but renderer did not reach PLAYING")
+            if (!isCurrentRequest(request)) return
+            var snapshot = waitForExpectedPlayback(
+                request = request,
+                expectedUrl = url,
+                timeoutMs = 15_000,
+                reason = "after-play"
+            )
+            if (snapshot == null) {
+                if (isCurrentRequest(request)) {
+                    trace("CAST warning: renderer did not confirm expected media playback")
+                    markRequestError(request)
                 }
-            } catch (e: Exception) {
-                Log.e(tag, "loadAndPlay error", e)
-                trace("CAST ERROR ${e.javaClass.simpleName}: ${e.message}")
+                return
+            }
+
+            val targetPosition = if (isCurrentRequest(request)) desiredPositionMs else return
+            val shouldSeek = desiredPositionExplicit || request.seekOnStart
+            if (shouldSeek) {
+                trace("CAST apply pending seek generation=${request.generation} target=${msToTimeString(targetPosition)}")
+                val seekResult = sendSoapCommand(
+                    device.controlUrl,
+                    "Seek",
+                    "<Unit>REL_TIME</Unit><Target>${msToTimeString(targetPosition)}</Target>"
+                )
+                if (!seekResult.isSuccess) {
+                    if (isCurrentRequest(request)) {
+                        showCastError("Seek", seekResult)
+                        markRequestError(request)
+                    }
+                    return
+                }
+                snapshot = waitForExpectedPlayback(
+                    request = request,
+                    expectedUrl = url,
+                    timeoutMs = 15_000,
+                    reason = "after-start-seek"
+                ) ?: run {
+                    if (isCurrentRequest(request)) markRequestError(request)
+                    return
+                }
+            }
+
+            markRequestReady(request, url, snapshot)
+        } catch (e: Exception) {
+            Log.e(tag, "loadAndPlay error", e)
+            trace("CAST ERROR generation=${request.generation} ${e.javaClass.simpleName}: ${e.message}")
+            if (isCurrentRequest(request)) {
                 showCastError("Cast", SoapResult(exceptionMessage = e.message))
-            } finally {
-                isLoadingTrack = false
+                markRequestError(request)
             }
         }
     }
 
-    private suspend fun stopTransportForMediaSwitch(controlUrl: String, reason: String): Boolean {
+    private suspend fun waitForExpectedPlayback(
+        request: CastRequest,
+        expectedUrl: String,
+        timeoutMs: Long,
+        reason: String
+    ): RendererSnapshot? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var lastState: String? = null
+        var lastUri: String? = null
+
+        while (isConnected && isCurrentRequest(request) && System.currentTimeMillis() < deadline) {
+            val currentUri = getCurrentMediaUriOrNull()
+            val state = getTransportStateOrNull()
+            val pos = getPositionInfo()
+
+            if (state != null && state != lastState) {
+                trace("CAST wait[$reason] generation=${request.generation} state=$state")
+                lastState = state
+            }
+            if (!currentUri.isNullOrBlank() && currentUri != lastUri) {
+                trace("CAST wait[$reason] generation=${request.generation} uri=$currentUri")
+                lastUri = currentUri
+            }
+
+            val uriMatches = currentUri.isNullOrBlank() || mediaUrisMatch(currentUri, expectedUrl)
+            if (uriMatches && state == "PLAYING" && pos != null && pos.second > 0L) {
+                return RendererSnapshot(
+                    state = state,
+                    positionMs = pos.first,
+                    durationMs = pos.second
+                )
+            }
+            delay(250)
+        }
+
+        trace(
+            "CAST wait[$reason] timeout/superseded generation=${request.generation} " +
+                "state=${lastState ?: "unknown"} uri=${lastUri ?: "unknown"}"
+        )
+        return null
+    }
+
+    private suspend fun markRequestReady(
+        request: CastRequest,
+        expectedUrl: String,
+        snapshot: RendererSnapshot
+    ) {
+        if (!isCurrentRequest(request)) return
+
+        confirmedVideoPath = request.videoPath
+        confirmedVideoUrl = expectedUrl
+        currentPositionMs = snapshot.positionMs
+        durationMs = snapshot.durationMs
+        isPlaying = snapshot.state == "PLAYING"
+        isLoadingTrack = false
+        desiredPositionExplicit = false
+        controlState = if (isPlaying) CastControlState.READY_PLAYING else CastControlState.READY_PAUSED
+        trace("CAST READY generation=${request.generation} state=${snapshot.state} url=$expectedUrl")
+        notifyStateChanged()
+    }
+
+    private suspend fun markRequestError(request: CastRequest) {
+        if (!isCurrentRequest(request)) return
+        isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.ERROR
+        trace("CAST ERROR state generation=${request.generation}")
+        notifyStateChanged()
+    }
+
+    private suspend fun stopTransportForMediaSwitch(
+        controlUrl: String,
+        reason: String,
+        generation: Long? = null
+    ): Boolean {
+        if (generation != null && generation != latestRequestGeneration) return false
         var state = getTransportStateOrNull()
         trace("CAST stop-check[$reason] state=${state ?: "unknown"}")
 
@@ -662,7 +924,8 @@ class DLNACastManager(private val context: Context) {
             state = waitForTransportState(
                 expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
                 timeoutMs = 10_000,
-                reason = "$reason-stop-701"
+                reason = "$reason-stop-701",
+                generation = generation
             )
             if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
             trace("CAST Stop retry after 701 state=${state ?: "unknown"}")
@@ -680,7 +943,8 @@ class DLNACastManager(private val context: Context) {
         val stoppedState = waitForTransportState(
             expected = setOf("STOPPED", "NO_MEDIA_PRESENT"),
             timeoutMs = 10_000,
-            reason = "$reason-stopped"
+            reason = "$reason-stopped",
+            generation = generation
         )
         val stopped = stoppedState == "STOPPED" || stoppedState == "NO_MEDIA_PRESENT"
         if (!stopped) {
@@ -692,11 +956,14 @@ class DLNACastManager(private val context: Context) {
     private suspend fun waitForTransportState(
         expected: Set<String>,
         timeoutMs: Long,
-        reason: String
+        reason: String,
+        generation: Long? = null
     ): String? {
         val deadline = System.currentTimeMillis() + timeoutMs
         var lastState: String? = null
-        while (isConnected && System.currentTimeMillis() < deadline) {
+        while (isConnected &&
+            (generation == null || generation == latestRequestGeneration) &&
+            System.currentTimeMillis() < deadline) {
             val state = getTransportStateOrNull()
             if (state != null && state != lastState) {
                 trace("CAST wait[$reason] state=$state")
@@ -712,37 +979,214 @@ class DLNACastManager(private val context: Context) {
     // ── Playback controls ────────────────────────────────────────────────────
 
     fun play() {
-        val device = connectedDevice ?: return
-        scope.launch {
-            val result = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
-            if (!result.isSuccess) showCastError("Play", result)
+        when (controlState) {
+            CastControlState.BROWSING, CastControlState.ERROR -> {
+                val path = currentVideoPath
+                if (path.isNotEmpty()) {
+                    loadAndPlay(
+                        videoPath = path,
+                        videoTitle = currentTitle,
+                        startPositionMs = currentPositionMs,
+                        seekOnStart = true
+                    )
+                }
+            }
+            CastControlState.READY_PAUSED -> {
+                val device = connectedDevice ?: return
+                isPlaying = false
+                isLoadingTrack = true
+                controlState = CastControlState.PREPARING
+                notifyStateChangedAsync()
+                scope.launch {
+                    val result = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+                    if (!result.isSuccess) {
+                        showCastError("Play", result)
+                        isLoadingTrack = false
+                        controlState = CastControlState.ERROR
+                        notifyStateChanged()
+                        return@launch
+                    }
+                    confirmCurrentMediaState("resume-play")
+                }
+            }
+            else -> Unit
         }
     }
 
     fun pause() {
+        if (controlState != CastControlState.READY_PLAYING) return
         val device = connectedDevice ?: return
+        isPlaying = false
+        isLoadingTrack = true
+        controlState = CastControlState.PREPARING
+        notifyStateChangedAsync()
         scope.launch {
             val result = sendSoapCommand(device.controlUrl, "Pause", "")
-            if (!result.isSuccess) showCastError("Pause", result)
+            if (!result.isSuccess) {
+                showCastError("Pause", result)
+                isLoadingTrack = false
+                controlState = CastControlState.ERROR
+                notifyStateChanged()
+                return@launch
+            }
+            confirmCurrentMediaState("pause")
         }
     }
 
     fun seekTo(posMs: Long) {
-        val device = connectedDevice ?: return
-        scope.launch {
-            val state = getTransportStateOrNull()
-            if (state != "PLAYING" && state != "PAUSED_PLAYBACK") {
-                trace("CAST Seek skipped state=${state ?: "unknown"} target=${msToTimeString(posMs)}")
-                return@launch
+        val bounded = if (durationMs > 0L) {
+            posMs.coerceIn(0L, durationMs)
+        } else {
+            posMs.coerceAtLeast(0L)
+        }
+
+        when (controlState) {
+            CastControlState.PREPARING -> {
+                desiredPositionMs = bounded
+                desiredPositionExplicit = true
+                currentPositionMs = bounded
+                trace("CAST pending seek generation=$latestRequestGeneration target=${msToTimeString(bounded)}")
+                notifyStateChangedAsync()
             }
-            val result = sendSoapCommand(
-                device.controlUrl,
-                "Seek",
-                "<Unit>REL_TIME</Unit><Target>${msToTimeString(posMs)}</Target>"
-            )
-            if (!result.isSuccess) showCastError("Seek", result)
+            CastControlState.READY_PAUSED,
+            CastControlState.BROWSING,
+            CastControlState.ERROR -> beginBrowseAtPosition(bounded)
+            CastControlState.READY_PLAYING -> {
+                val device = connectedDevice ?: return
+                isPlaying = false
+                isLoadingTrack = true
+                controlState = CastControlState.PREPARING
+                currentPositionMs = bounded
+                notifyStateChangedAsync()
+                scope.launch {
+                    val result = sendSoapCommand(
+                        device.controlUrl,
+                        "Seek",
+                        "<Unit>REL_TIME</Unit><Target>${msToTimeString(bounded)}</Target>"
+                    )
+                    if (!result.isSuccess) {
+                        showCastError("Seek", result)
+                        isLoadingTrack = false
+                        controlState = CastControlState.ERROR
+                        notifyStateChanged()
+                        return@launch
+                    }
+                    confirmCurrentMediaState("seek")
+                }
+            }
+            else -> trace("CAST Seek skipped state=$controlState target=${msToTimeString(bounded)}")
         }
     }
+
+    fun seekBy(deltaMs: Long) {
+        if (controlState != CastControlState.READY_PLAYING) return
+        seekTo(currentPositionMs + deltaMs)
+    }
+
+    fun browseNext() = browseBy(1)
+
+    fun browsePrevious() = browseBy(-1)
+
+    private fun browseBy(delta: Int) {
+        if (playlist.isEmpty()) return
+        if (controlState != CastControlState.READY_PAUSED &&
+            controlState != CastControlState.BROWSING &&
+            controlState != CastControlState.ERROR) {
+            return
+        }
+
+        val generation = nextRequestGeneration()
+        currentIndex = (currentIndex + delta + playlist.size) % playlist.size
+        val path = playlist[currentIndex]
+        val title = playlistTitles.getOrElse(currentIndex) {
+            File(path.removePrefix("file://")).nameWithoutExtension
+        }
+
+        currentTitle = title
+        currentVideoPath = path
+        currentPositionMs = 0L
+        durationMs = 0L
+        desiredPositionMs = 0L
+        desiredPositionExplicit = true
+        isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.BROWSING
+        trace("CAST browse generation=$generation index=$currentIndex title=$title")
+        notifyStateChangedAsync()
+
+        scope.launch {
+            val localDuration = probeMedia(path).durationMs ?: 0L
+            if (generation == latestRequestGeneration &&
+                controlState == CastControlState.BROWSING &&
+                currentVideoPath == path) {
+                durationMs = localDuration
+                val upperBound = localDuration.takeIf { it > 0L } ?: Long.MAX_VALUE
+                currentPositionMs = currentPositionMs.coerceIn(0L, upperBound)
+                notifyStateChanged()
+            }
+        }
+    }
+
+    private fun beginBrowseAtPosition(posMs: Long) {
+        if (currentVideoPath.isEmpty()) return
+        if (controlState == CastControlState.READY_PAUSED) {
+            val generation = nextRequestGeneration()
+            trace("CAST browse current generation=$generation title=$currentTitle")
+        }
+        currentPositionMs = posMs
+        desiredPositionMs = posMs
+        desiredPositionExplicit = true
+        isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.BROWSING
+        notifyStateChangedAsync()
+    }
+
+    private suspend fun confirmCurrentMediaState(reason: String) {
+        val expectedUrl = confirmedVideoUrl
+        if (expectedUrl.isEmpty() || confirmedVideoPath.isEmpty()) {
+            isLoadingTrack = false
+            controlState = CastControlState.ERROR
+            notifyStateChanged()
+            return
+        }
+
+        val deadline = System.currentTimeMillis() + 10_000L
+        var lastState: String? = null
+        while (isConnected && System.currentTimeMillis() < deadline) {
+            val uri = getCurrentMediaUriOrNull()
+            val state = getTransportStateOrNull()
+            val pos = getPositionInfo()
+            if (state != null && state != lastState) {
+                trace("CAST wait[$reason] state=$state")
+                lastState = state
+            }
+
+            val uriMatches = uri.isNullOrBlank() || mediaUrisMatch(uri, expectedUrl)
+            if (uriMatches && state in setOf("PLAYING", "PAUSED_PLAYBACK") &&
+                pos != null && pos.second > 0L) {
+                currentPositionMs = pos.first
+                durationMs = pos.second
+                isPlaying = state == "PLAYING"
+                isLoadingTrack = false
+                controlState = if (isPlaying) {
+                    CastControlState.READY_PLAYING
+                } else {
+                    CastControlState.READY_PAUSED
+                }
+                notifyStateChanged()
+                return
+            }
+            delay(250)
+        }
+
+        trace("CAST wait[$reason] timeout state=${lastState ?: "unknown"}")
+        isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.ERROR
+        notifyStateChanged()
+    }
+
     fun next() {
         if (playlist.isEmpty()) return
         currentIndex = (currentIndex + 1) % playlist.size
@@ -769,6 +1213,10 @@ class DLNACastManager(private val context: Context) {
         isPlaying = false
         currentPositionMs = 0L
         durationMs = 0L
+        controlState = if (isConnected) CastControlState.IDLE else CastControlState.DISCONNECTED
+        confirmedVideoPath = ""
+        confirmedVideoUrl = ""
+        nextRequestGeneration()
         connectedDevice?.let { scope.launch { sendSoap(it.controlUrl, "Stop", "") } }
         scope.launch(Dispatchers.Main) { onStateChanged?.invoke() }
     }
@@ -782,6 +1230,11 @@ class DLNACastManager(private val context: Context) {
     fun disconnect() {
         isConnected = false
         isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.DISCONNECTED
+        confirmedVideoPath = ""
+        confirmedVideoUrl = ""
+        nextRequestGeneration()
         connectedDevice = null
         connectionListener?.invoke(false)
         onConnectionStateChanged?.invoke(false)
@@ -809,6 +1262,24 @@ class DLNACastManager(private val context: Context) {
             val dur = parseTimeString(extractXmlTag(response, "TrackDuration") ?: "0:00:00")
             Pair(pos, dur)
         } catch (_: Exception) { null }
+    }
+
+    private fun getCurrentMediaUriOrNull(): String? {
+        val device = connectedDevice ?: return null
+        return try {
+            val response = sendSoap(device.controlUrl, "GetMediaInfo", "") ?: return null
+            extractXmlTag(response, "CurrentURI")?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun mediaUrisMatch(actual: String, expected: String): Boolean {
+        fun normalize(value: String): String {
+            val trimmed = value.trim().replace("&amp;", "&")
+            return runCatching { URLDecoder.decode(trimmed, "UTF-8") }.getOrDefault(trimmed)
+        }
+        return normalize(actual) == normalize(expected)
     }
 
     private fun getTransportStateOrNull(): String? {

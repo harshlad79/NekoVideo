@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -50,6 +51,7 @@ fun CastControlsOverlay(
     val overlayInteractionSource = remember { MutableInteractionSource() }
 
     var isPlaying by remember { mutableStateOf(castManager.isPlaying) }
+    var controlState by remember { mutableStateOf(castManager.controlState) }
     var currentPosition by remember { mutableStateOf(castManager.currentPositionMs) }
     var duration by remember { mutableStateOf(castManager.durationMs) }
     var isSeeking by remember { mutableStateOf(false) }
@@ -63,6 +65,7 @@ fun CastControlsOverlay(
     LaunchedEffect(Unit) {
         castManager.onStateChanged = {
             isPlaying = castManager.isPlaying
+            controlState = castManager.controlState
             if (!isSeeking) currentPosition = castManager.currentPositionMs
             duration = castManager.durationMs
             if (castManager.currentTitle.isNotEmpty()) currentTitle = castManager.currentTitle
@@ -110,6 +113,14 @@ fun CastControlsOverlay(
         }
     }
 
+    val isPreparing = controlState == DLNACastManager.CastControlState.PREPARING
+    val isReadyPlaying = controlState == DLNACastManager.CastControlState.READY_PLAYING
+    val controlsEnabled = controlState == DLNACastManager.CastControlState.READY_PLAYING ||
+        controlState == DLNACastManager.CastControlState.READY_PAUSED ||
+        controlState == DLNACastManager.CastControlState.BROWSING ||
+        controlState == DLNACastManager.CastControlState.ERROR
+    val controlAlpha = if (controlsEnabled) 1f else 0.35f
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -137,7 +148,7 @@ fun CastControlsOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.65f))
+                .background(Color.Black.copy(alpha = if (isPreparing) 0.78f else 0.65f))
         )
 
         // Header
@@ -228,12 +239,45 @@ fun CastControlsOverlay(
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                 }
-                if (duration > 0) {
-                    Text(
-                        text = "${formatTime(currentPosition)} / ${formatTime(duration)}",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 14.sp
-                    )
+                Text(
+                    text = "${formatTime(currentPosition)} / ${if (duration > 0) formatTime(duration) else "--:--"}",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 14.sp
+                )
+
+                when (controlState) {
+                    DLNACastManager.CastControlState.PREPARING -> {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                            Text(
+                                text = stringResource(R.string.cast_waiting_for_tv),
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                    DLNACastManager.CastControlState.BROWSING -> {
+                        Text(
+                            text = stringResource(R.string.cast_browse_hint),
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 14.sp
+                        )
+                    }
+                    DLNACastManager.CastControlState.ERROR -> {
+                        Text(
+                            text = stringResource(R.string.cast_retry_hint),
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 14.sp
+                        )
+                    }
+                    else -> Unit
                 }
             }
 
@@ -241,15 +285,23 @@ fun CastControlsOverlay(
             Row(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(controlAlpha)
             ) {
                 IconButton(
-                    onClick = { castManager.previous() },
+                    enabled = controlsEnabled,
+                    onClick = {
+                        if (isReadyPlaying) castManager.seekBy(-10_000L)
+                        else castManager.browsePrevious()
+                    },
                     modifier = Modifier.size(56.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.SkipPrevious,
-                        contentDescription = stringResource(R.string.previous),
+                        imageVector = if (isReadyPlaying) Icons.Default.Replay10 else Icons.Default.SkipPrevious,
+                        contentDescription = stringResource(
+                            if (isReadyPlaying) R.string.player_seek_backward else R.string.previous
+                        ),
                         tint = Color.White,
                         modifier = Modifier.size(32.dp)
                     )
@@ -258,14 +310,15 @@ fun CastControlsOverlay(
                 Spacer(modifier = Modifier.width(32.dp))
 
                 IconButton(
-                    onClick = { if (isPlaying) castManager.pause() else castManager.play() },
+                    enabled = controlsEnabled,
+                    onClick = { if (isReadyPlaying) castManager.pause() else castManager.play() },
                     modifier = Modifier
                         .background(Color.White.copy(alpha = 0.9f), CircleShape)
                         .size(80.dp)
                 ) {
                     Icon(
-                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
+                        imageVector = if (isReadyPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isReadyPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
                         tint = Color.Black,
                         modifier = Modifier.size(44.dp)
                     )
@@ -274,12 +327,18 @@ fun CastControlsOverlay(
                 Spacer(modifier = Modifier.width(32.dp))
 
                 IconButton(
-                    onClick = { castManager.next() },
+                    enabled = controlsEnabled,
+                    onClick = {
+                        if (isReadyPlaying) castManager.seekBy(10_000L)
+                        else castManager.browseNext()
+                    },
                     modifier = Modifier.size(56.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.SkipNext,
-                        contentDescription = stringResource(R.string.next),
+                        imageVector = if (isReadyPlaying) Icons.Default.Forward10 else Icons.Default.SkipNext,
+                        contentDescription = stringResource(
+                            if (isReadyPlaying) R.string.player_seek_forward else R.string.next
+                        ),
                         tint = Color.White,
                         modifier = Modifier.size(32.dp)
                     )
@@ -314,9 +373,16 @@ fun CastControlsOverlay(
             }
         }
 
-        // Seek bar at bottom
-        if (duration > 0) {
-            var tempPosition by remember { mutableStateOf(currentPosition) }
+        // Seek bar at bottom — always visible; interaction follows cast state.
+        run {
+            var tempPosition by remember(currentVideoPath, duration) { mutableStateOf(currentPosition) }
+            val sliderEnabled = controlsEnabled && duration > 0L
+            val maxValue = duration.takeIf { it > 0L }?.toFloat() ?: 1f
+            val shownPosition = if (duration > 0L) {
+                (if (isSeeking) tempPosition else currentPosition).coerceIn(0L, duration)
+            } else {
+                0L
+            }
 
             Column(
                 modifier = Modifier
@@ -359,7 +425,8 @@ fun CastControlsOverlay(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Slider(
-                    value = if (isSeeking) tempPosition.toFloat() else currentPosition.toFloat(),
+                    enabled = sliderEnabled,
+                    value = shownPosition.toFloat(),
                     onValueChange = { newValue ->
                         tempPosition = newValue.toLong()
                         isSeeking = true
@@ -368,13 +435,15 @@ fun CastControlsOverlay(
                         castManager.seekTo(tempPosition)
                         isSeeking = false
                     },
-                    valueRange = 0f..duration.toFloat(),
+                    valueRange = 0f..maxValue,
                     colors = SliderDefaults.colors(
                         thumbColor = Color(0xFF4CAF50),
                         activeTrackColor = Color(0xFF4CAF50),
                         inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(if (sliderEnabled) 1f else 0.4f)
                 )
             }
         }

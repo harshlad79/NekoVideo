@@ -7,6 +7,7 @@ import fi.iki.elonen.NanoHTTPD
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 
 class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTTPD(port) {
 
@@ -15,12 +16,13 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
         DebugTraceLogger.log(context, message)
     }
 
-    private val videoMap = mutableMapOf<String, String>() // nome -> path
-    private val lockedVideoKeys = mutableMapOf<String, ByteArray>() // nome -> xorKey
+    private val videoMap = ConcurrentHashMap<String, String>() // name -> path
+    private val lockedVideoKeys = ConcurrentHashMap<String, ByteArray>() // name -> xorKey
 
     fun addVideo(videoPath: String) {
         val videoName = File(videoPath).name
         videoMap[videoName] = videoPath
+        lockedVideoKeys.remove(videoName)
     }
 
     fun addLockedVideo(videoPath: String, xorKey: ByteArray, originalName: String) {
