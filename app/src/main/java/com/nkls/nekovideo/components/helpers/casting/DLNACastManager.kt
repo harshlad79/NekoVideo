@@ -257,22 +257,24 @@ class DLNACastManager(private val context: Context) {
                         durationMs = pos.second
                     }
 
-                    val transportState = getTransportState()
-                    isPlaying = transportState == "PLAYING"
-                    if (transportState != lastTransportState) {
-                        trace("TV transport state ${lastTransportState ?: "<initial>"} -> $transportState")
-                        lastTransportState = transportState
-                    }
+                    val transportState = getTransportStateOrNull()
+                    if (transportState != null) {
+                        isPlaying = transportState == "PLAYING"
+                        if (transportState != lastTransportState) {
+                            trace("TV transport state ${lastTransportState ?: "<initial>"} -> $transportState")
+                            lastTransportState = transportState
+                        }
 
-                    // Auto-advance when video ends naturally (PLAYING → STOPPED/NO_MEDIA_PRESENT)
-                    // Guard isLoadingTrack: Smart TVs briefly enter STOPPED during SetAVTransportURI
-                    // which would otherwise trigger a spurious next() and skip the intended video.
-                    if (wasPlaying && !isPlaying && !stoppedByUser && !isLoadingTrack && playlist.size > 1
-                        && transportState != "PAUSED_PLAYBACK") {
-                        withContext(Dispatchers.Main) { next() }
-                    }
+                        // Auto-advance when video ends naturally (PLAYING → STOPPED/NO_MEDIA_PRESENT)
+                        // Guard isLoadingTrack: Smart TVs briefly enter STOPPED during SetAVTransportURI
+                        // which would otherwise trigger a spurious next() and skip the intended video.
+                        if (wasPlaying && !isPlaying && !stoppedByUser && !isLoadingTrack && playlist.size > 1
+                            && transportState != "PAUSED_PLAYBACK") {
+                            withContext(Dispatchers.Main) { next() }
+                        }
 
-                    wasPlaying = isPlaying
+                        wasPlaying = isPlaying
+                    }
                     withContext(Dispatchers.Main) {
                         onStateChanged?.invoke()
                         onServiceStateChanged?.invoke()
@@ -369,7 +371,11 @@ class DLNACastManager(private val context: Context) {
         val videoMime: String? = null,
         val audioMime: String? = null,
         val videoProfile: Int? = null,
-        val videoLevel: Int? = null
+        val videoLevel: Int? = null,
+        val audioProfile: Int? = null,
+        val audioChannelCount: Int? = null,
+        val audioSampleRate: Int? = null,
+        val audioBitrate: Int? = null
     )
 
     /**
@@ -399,26 +405,84 @@ class DLNACastManager(private val context: Context) {
         var audioMime: String? = null
         var videoProfile: Int? = null
         var videoLevel: Int? = null
+        var audioProfile: Int? = null
+        var audioChannelCount: Int? = null
+        var audioSampleRate: Int? = null
+        var audioBitrate: Int? = null
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.absolutePath)
+            trace("MEDIA probe file=${file.name} trackCount=${extractor.trackCount}")
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/") && videoMime == null) {
+                val mime = format.getString(MediaFormat.KEY_MIME)
+
+                fun intValue(key: String): Int? = runCatching {
+                    if (format.containsKey(key)) format.getInteger(key) else null
+                }.getOrNull()
+
+                val profile = intValue(MediaFormat.KEY_PROFILE)
+                    ?: intValue(MediaFormat.KEY_AAC_PROFILE)
+                val level = intValue(MediaFormat.KEY_LEVEL)
+                val channels = intValue(MediaFormat.KEY_CHANNEL_COUNT)
+                val sampleRate = intValue(MediaFormat.KEY_SAMPLE_RATE)
+                val bitrate = intValue(MediaFormat.KEY_BIT_RATE)
+                val csd = (0..2).mapNotNull { index ->
+                    runCatching { format.getByteBuffer("csd-$index")?.remaining() }
+                        .getOrNull()
+                        ?.let { size -> "csd-$index=$size" }
+                }.joinToString(",")
+
+                trace(
+                    buildString {
+                        append("MEDIA track[$i] mime=${mime ?: "<none>"}")
+                        if (profile != null) append(" profile=$profile")
+                        if (level != null) append(" level=$level")
+                        if (channels != null) append(" channels=$channels")
+                        if (sampleRate != null) append(" sampleRate=$sampleRate")
+                        if (bitrate != null) append(" bitrate=$bitrate")
+                        if (csd.isNotEmpty()) append(" $csd")
+                    }
+                )
+
+                if (mime?.startsWith("video/") == true && videoMime == null) {
                     videoMime = mime
-                    if (format.containsKey(MediaFormat.KEY_PROFILE)) videoProfile = format.getInteger(MediaFormat.KEY_PROFILE)
-                    if (format.containsKey(MediaFormat.KEY_LEVEL)) videoLevel = format.getInteger(MediaFormat.KEY_LEVEL)
+                    videoProfile = profile
+                    videoLevel = level
                 }
-                if (mime.startsWith("audio/") && audioMime == null) audioMime = mime
+                if (mime?.startsWith("audio/") == true && audioMime == null) {
+                    audioMime = mime
+                    audioProfile = profile
+                    audioChannelCount = channels
+                    audioSampleRate = sampleRate
+                    audioBitrate = bitrate
+                }
             }
         } catch (e: Exception) {
             Log.w(tag, "MediaExtractor failed for ${file.name}: ${e.message}")
+            trace("MEDIA probe failed file=${file.name} error=${e.javaClass.simpleName}: ${e.message}")
         } finally {
             extractor.release()
         }
 
-        return DlnaMediaInfo(file.length(), durationMs, width, height, videoMime, audioMime, videoProfile, videoLevel)
+        if (audioMime == null) {
+            trace("MEDIA warning file=${file.name} audio track not identified")
+        }
+
+        return DlnaMediaInfo(
+            size = file.length(),
+            durationMs = durationMs,
+            width = width,
+            height = height,
+            videoMime = videoMime,
+            audioMime = audioMime,
+            videoProfile = videoProfile,
+            videoLevel = videoLevel,
+            audioProfile = audioProfile,
+            audioChannelCount = audioChannelCount,
+            audioSampleRate = audioSampleRate,
+            audioBitrate = audioBitrate
+        )
     }
 
     private fun formatDlnaDuration(durationMs: Long): String {
@@ -473,7 +537,7 @@ class DLNACastManager(private val context: Context) {
                 append(" resolution=\"${info.width}x${info.height}\"")
             }
         }
-        Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} profile=${info.videoProfile} level=${info.videoLevel} audio=${info.audioMime} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height} dlnaProfile=$profileName")
+        Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} profile=${info.videoProfile} level=${info.videoLevel} audio=${info.audioMime} audioProfile=${info.audioProfile} channels=${info.audioChannelCount} sampleRate=${info.audioSampleRate} bitrate=${info.audioBitrate} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height} dlnaProfile=$profileName")
         val didl = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="false"><dc:title>${title.escapeXml()}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="$protocolInfo"$attributes>${url.escapeXml()}</res></item></DIDL-Lite>"""
         return didl.escapeXml()
     }
@@ -493,44 +557,158 @@ class DLNACastManager(private val context: Context) {
                 val mime = mimeTypeFor(videoPath)
                 trace("CAST 5 probeMedia START mime=$mime")
                 val mediaInfo = probeMedia(videoPath)
-                trace("CAST 6 probeMedia END video=${mediaInfo.videoMime} audio=${mediaInfo.audioMime}")
+                trace(
+                    "CAST 6 probeMedia END video=${mediaInfo.videoMime} audio=${mediaInfo.audioMime} " +
+                        "audioProfile=${mediaInfo.audioProfile} channels=${mediaInfo.audioChannelCount} " +
+                        "sampleRate=${mediaInfo.audioSampleRate} bitrate=${mediaInfo.audioBitrate}"
+                )
                 val metadata = buildDIDLMetadata(videoTitle, url, mime, mediaInfo)
                 trace("CAST 7 DIDL ready")
+
+                stopTransportForMediaSwitch(device.controlUrl, "before-set-uri")
+
                 trace("CAST 8 SetAVTransportURI START")
-                val setUriResult = sendSoapCommand(
+                var setUriResult = sendSoapCommand(
                     device.controlUrl,
                     "SetAVTransportURI",
                     "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
                 )
+
+                if (!setUriResult.isSuccess && setUriResult.errorCode == "705") {
+                    trace("CAST SetAVTransportURI returned 705; stopping transport and retrying once")
+                    stopTransportForMediaSwitch(device.controlUrl, "705-retry")
+                    setUriResult = sendSoapCommand(
+                        device.controlUrl,
+                        "SetAVTransportURI",
+                        "<CurrentURI>${url.escapeXml()}</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
+                    )
+                }
+
                 trace("CAST 9 SetAVTransportURI END success=${setUriResult.isSuccess}")
                 if (!setUriResult.isSuccess) {
                     showCastError("SetAVTransportURI", setUriResult)
-                    isLoadingTrack = false
                     return@launch
                 }
 
-                delay(500)
+                var state = getTransportStateOrNull()
+                if (state == "TRANSITIONING") {
+                    state = waitForTransportState(
+                        expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
+                        timeoutMs = 15_000,
+                        reason = "after-set-uri"
+                    )
+                }
+                trace("CAST post-URI state=${state ?: "unknown"}")
+
+                if (state == "PLAYING") {
+                    trace("CAST Play skipped: renderer already PLAYING")
+                    return@launch
+                }
+
                 trace("CAST 10 Play START")
-                val playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+                var playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+
+                if (!playResult.isSuccess && playResult.errorCode == "701") {
+                    val current = getTransportStateOrNull()
+                    if (current == "TRANSITIONING") {
+                        val settled = waitForTransportState(
+                            expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
+                            timeoutMs = 15_000,
+                            reason = "play-701"
+                        )
+                        if (settled == "PLAYING") {
+                            trace("CAST Play 701 ignored: renderer reached PLAYING on its own")
+                            return@launch
+                        }
+                        if (settled == "STOPPED" || settled == "PAUSED_PLAYBACK") {
+                            trace("CAST Play retry after 701 state=$settled")
+                            playResult = sendSoapCommand(device.controlUrl, "Play", "<Speed>1</Speed>")
+                        }
+                    }
+                }
+
                 trace("CAST 11 Play END success=${playResult.isSuccess}")
                 if (!playResult.isSuccess) {
                     showCastError("Play", playResult)
-                    isLoadingTrack = false
                     return@launch
                 }
 
-                // Do not assume PLAYING from HTTP success. The polling loop owns playback state
-                // and updates the UI only from the renderer's GetTransportInfo response.
-                delay(1500)
-                isLoadingTrack = false
+                val playingState = waitForTransportState(
+                    expected = setOf("PLAYING"),
+                    timeoutMs = 15_000,
+                    reason = "after-play"
+                )
+                if (playingState != "PLAYING") {
+                    trace("CAST warning: Play returned success but renderer did not reach PLAYING")
+                }
             } catch (e: Exception) {
                 Log.e(tag, "loadAndPlay error", e)
                 trace("CAST ERROR ${e.javaClass.simpleName}: ${e.message}")
                 showCastError("Cast", SoapResult(exceptionMessage = e.message))
+            } finally {
                 isLoadingTrack = false
             }
         }
     }
+
+    private suspend fun stopTransportForMediaSwitch(controlUrl: String, reason: String): Boolean {
+        var state = getTransportStateOrNull()
+        trace("CAST stop-check[$reason] state=${state ?: "unknown"}")
+
+        if (state == null || state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
+
+        var stopResult = sendSoapCommand(controlUrl, "Stop", "")
+        if (!stopResult.isSuccess && stopResult.errorCode == "701" && state == "TRANSITIONING") {
+            state = waitForTransportState(
+                expected = setOf("STOPPED", "PLAYING", "PAUSED_PLAYBACK", "NO_MEDIA_PRESENT"),
+                timeoutMs = 10_000,
+                reason = "$reason-stop-701"
+            )
+            if (state == "STOPPED" || state == "NO_MEDIA_PRESENT") return true
+            trace("CAST Stop retry after 701 state=${state ?: "unknown"}")
+            stopResult = sendSoapCommand(controlUrl, "Stop", "")
+        }
+
+        if (!stopResult.isSuccess) {
+            trace(
+                "CAST Stop failed[$reason] HTTP=${stopResult.httpStatus} " +
+                    "UPnP=${stopResult.errorCode} description=${stopResult.errorDescription}"
+            )
+            return false
+        }
+
+        val stoppedState = waitForTransportState(
+            expected = setOf("STOPPED", "NO_MEDIA_PRESENT"),
+            timeoutMs = 10_000,
+            reason = "$reason-stopped"
+        )
+        val stopped = stoppedState == "STOPPED" || stoppedState == "NO_MEDIA_PRESENT"
+        if (!stopped) {
+            trace("CAST Stop timeout[$reason] last=${stoppedState ?: "unknown"}")
+        }
+        return stopped
+    }
+
+    private suspend fun waitForTransportState(
+        expected: Set<String>,
+        timeoutMs: Long,
+        reason: String
+    ): String? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var lastState: String? = null
+        while (isConnected && System.currentTimeMillis() < deadline) {
+            val state = getTransportStateOrNull()
+            if (state != null && state != lastState) {
+                trace("CAST wait[$reason] state=$state")
+                lastState = state
+            }
+            if (state != null && state in expected) return state
+            delay(250)
+        }
+        trace("CAST wait[$reason] timeout last=${lastState ?: "unknown"}")
+        return lastState
+    }
+
     // ── Playback controls ────────────────────────────────────────────────────
 
     fun play() {
@@ -552,6 +730,11 @@ class DLNACastManager(private val context: Context) {
     fun seekTo(posMs: Long) {
         val device = connectedDevice ?: return
         scope.launch {
+            val state = getTransportStateOrNull()
+            if (state != "PLAYING" && state != "PAUSED_PLAYBACK") {
+                trace("CAST Seek skipped state=${state ?: "unknown"} target=${msToTimeString(posMs)}")
+                return@launch
+            }
             val result = sendSoapCommand(
                 device.controlUrl,
                 "Seek",
@@ -628,13 +811,18 @@ class DLNACastManager(private val context: Context) {
         } catch (_: Exception) { null }
     }
 
-    private fun getTransportState(): String {
-        val device = connectedDevice ?: return "STOPPED"
+    private fun getTransportStateOrNull(): String? {
+        val device = connectedDevice ?: return null
         return try {
-            val response = sendSoap(device.controlUrl, "GetTransportInfo", "") ?: return "STOPPED"
-            extractXmlTag(response, "CurrentTransportState") ?: "STOPPED"
-        } catch (_: Exception) { "STOPPED" }
+            val response = sendSoap(device.controlUrl, "GetTransportInfo", "") ?: return null
+            extractXmlTag(response, "CurrentTransportState")
+        } catch (_: Exception) {
+            null
+        }
     }
+
+    private fun getTransportState(): String =
+        getTransportStateOrNull() ?: "UNKNOWN"
 
     // ── SOAP ─────────────────────────────────────────────────────────────────
 
@@ -715,6 +903,7 @@ class DLNACastManager(private val context: Context) {
     private fun showCastError(action: String, result: SoapResult) {
         val description = result.errorDescription?.takeIf { it.isNotBlank() } ?: when (result.errorCode) {
             "701" -> "Transition not available"
+            "705" -> "Transport is locked"
             "710" -> "Seek mode not supported"
             "711" -> "Illegal seek target"
             "716" -> "Resource not found"
