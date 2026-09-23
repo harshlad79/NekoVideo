@@ -335,7 +335,9 @@ class DLNACastManager(private val context: Context) {
         val width: Int? = null,
         val height: Int? = null,
         val videoMime: String? = null,
-        val audioMime: String? = null
+        val audioMime: String? = null,
+        val videoProfile: Int? = null,
+        val videoLevel: Int? = null
     )
 
     /**
@@ -363,13 +365,19 @@ class DLNACastManager(private val context: Context) {
 
         var videoMime: String? = null
         var audioMime: String? = null
+        var videoProfile: Int? = null
+        var videoLevel: Int? = null
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(file.absolutePath)
             for (i in 0 until extractor.trackCount) {
                 val format = extractor.getTrackFormat(i)
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/") && videoMime == null) videoMime = mime
+                if (mime.startsWith("video/") && videoMime == null) {
+                    videoMime = mime
+                    if (format.containsKey(MediaFormat.KEY_PROFILE)) videoProfile = format.getInteger(MediaFormat.KEY_PROFILE)
+                    if (format.containsKey(MediaFormat.KEY_LEVEL)) videoLevel = format.getInteger(MediaFormat.KEY_LEVEL)
+                }
                 if (mime.startsWith("audio/") && audioMime == null) audioMime = mime
             }
         } catch (e: Exception) {
@@ -378,7 +386,7 @@ class DLNACastManager(private val context: Context) {
             extractor.release()
         }
 
-        return DlnaMediaInfo(file.length(), durationMs, width, height, videoMime, audioMime)
+        return DlnaMediaInfo(file.length(), durationMs, width, height, videoMime, audioMime, videoProfile, videoLevel)
     }
 
     private fun formatDlnaDuration(durationMs: Long): String {
@@ -392,6 +400,25 @@ class DLNACastManager(private val context: Context) {
         )
     }
 
+    private fun dlnaProfileName(mimeType: String, info: DlnaMediaInfo): String? {
+        // Start with profiles that can be identified from Android's parsed track metadata
+        // without guessing. Unknown combinations deliberately omit DLNA.ORG_PN.
+        if (mimeType != "video/mp4" || info.videoMime != "video/avc" || info.audioMime != "audio/mp4a-latm") return null
+
+        val width = info.width ?: return null
+        val height = info.height ?: return null
+        val profile = info.videoProfile ?: return null
+        val level = info.videoLevel ?: return null
+        val isSd = width <= 720 && height <= 576
+
+        // MediaCodecInfo.CodecProfileLevel values: AVCProfileBaseline=0x01,
+        // AVCLevel3=0x100, AVCLevel31=0x200. Bubble/Samsung capture showed
+        // AVC_MP4_BL_L3L_SD_AAC for the matching baseline/SD family.
+        return if (isSd && profile == 0x01 && level <= 0x200) {
+            "AVC_MP4_BL_L3L_SD_AAC"
+        } else null
+    }
+
     private fun buildDIDLMetadata(
         title: String,
         url: String,
@@ -401,7 +428,12 @@ class DLNACastManager(private val context: Context) {
         // OP=01 advertises byte-range support. 017... mirrors the richer Samsung-compatible
         // form observed from BubbleUPnP while keeping profile-name advertising conservative:
         // a wrong DLNA.ORG_PN is worse than omitting it.
-        val protocolInfo = "http-get:*:$mimeType:DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+        val profileName = dlnaProfileName(mimeType, info)
+        val additionalInfo = buildString {
+            if (profileName != null) append("DLNA.ORG_PN=$profileName;")
+            append("DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000")
+        }
+        val protocolInfo = "http-get:*:$mimeType:$additionalInfo"
         val attributes = buildString {
             info.size?.takeIf { it > 0 }?.let { append(" size=\\\"$it\\\"") }
             info.durationMs?.takeIf { it > 0 }?.let { append(" duration=\\\"${formatDlnaDuration(it)}\\\"") }
@@ -409,7 +441,7 @@ class DLNACastManager(private val context: Context) {
                 append(" resolution=\\\"${info.width}x${info.height}\\\"")
             }
         }
-        Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} audio=${info.audioMime} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height}")
+        Log.d(tag, "DLNA media: mime=$mimeType video=${info.videoMime} profile=${info.videoProfile} level=${info.videoLevel} audio=${info.audioMime} size=${info.size} duration=${info.durationMs} resolution=${info.width}x${info.height} dlnaProfile=$profileName")
         val didl = """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="-1" restricted="false"><dc:title>${title.escapeXml()}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="$protocolInfo"$attributes>${url.escapeXml()}</res></item></DIDL-Lite>"""
         return didl.escapeXml()
     }
