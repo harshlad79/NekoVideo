@@ -240,6 +240,22 @@ class MainActivity : AppCompatActivity() {
             }
             val selectedCrashState = androidx.compose.runtime.remember { mutableStateOf<java.io.File?>(null) }
             val traceAvailableState = androidx.compose.runtime.remember { mutableStateOf(DebugTraceLogger.file(this@MainActivity) != null) }
+            val diagnosticLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+            androidx.compose.runtime.DisposableEffect(diagnosticLifecycleOwner) {
+                val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                    if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                        val crashes = DebugCrashLogger.list(this@MainActivity)
+                        crashFilesState.value = crashes
+                        if (selectedCrashState.value !in crashes) {
+                            selectedCrashState.value = crashes.firstOrNull()
+                        }
+                        traceAvailableState.value = DebugTraceLogger.file(this@MainActivity) != null
+                    }
+                }
+                diagnosticLifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { diagnosticLifecycleOwner.lifecycle.removeObserver(observer) }
+            }
 
             LaunchedEffect(currentTheme, configuration.uiMode) {
                 applySystemBarsForTheme(currentTheme)
