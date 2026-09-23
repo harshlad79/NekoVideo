@@ -52,7 +52,7 @@ jobs:
 
       - name: Verify debug signing certificate
         env:
-          EXPECTED_DEBUG_CERT_SHA256: "A1:9F:E5:C7:64:40:1A:04:3F:D9:F2:BD:2A:07:6A:BB:16:A1:A2:C3:94:88:95:8A:D0:9A:AC:B3:3C:57:29:A1"
+          EXPECTED_DEBUG_CERT_SHA256: "66:57:6A:B7:A6:D0:FD:BB:9D:A0:B4:13:A0:38:9E:29:4C:B8:65:D5:1D:0C:7C:27:8B:C7:02:84:29:01:7D:E5"
         run: |
           ACTUAL=$(keytool -list -v \
             -keystore ~/.android/debug.keystore \
@@ -73,7 +73,7 @@ jobs:
 
       - name: Verify built APK signing certificate
         env:
-          EXPECTED_DEBUG_CERT_SHA256: "A1:9F:E5:C7:64:40:1A:04:3F:D9:F2:BD:2A:07:6A:BB:16:A1:A2:C3:94:88:95:8A:D0:9A:AC:B3:3C:57:29:A1"
+          EXPECTED_DEBUG_CERT_SHA256: "66:57:6A:B7:A6:D0:FD:BB:9D:A0:B4:13:A0:38:9E:29:4C:B8:65:D5:1D:0C:7C:27:8B:C7:02:84:29:01:7D:E5"
         run: |
           APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
           test -n "$APK" || { echo "Debug APK not found"; exit 1; }
