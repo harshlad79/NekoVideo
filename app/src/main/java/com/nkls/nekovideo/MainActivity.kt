@@ -239,6 +239,7 @@ class MainActivity : AppCompatActivity() {
                 mutableStateOf(DebugCrashLogger.list(this@MainActivity))
             }
             val selectedCrashState = androidx.compose.runtime.remember { mutableStateOf<java.io.File?>(null) }
+            val traceAvailableState = androidx.compose.runtime.remember { mutableStateOf(DebugTraceLogger.file(this@MainActivity) != null) }
 
             LaunchedEffect(currentTheme, configuration.uiMode) {
                 applySystemBarsForTheme(currentTheme)
@@ -263,39 +264,70 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val crashFile = selectedCrashState.value ?: crashFilesState.value.firstOrNull()
-                crashFile?.let { file ->
-                    val crashLog = DebugCrashLogger.read(file).orEmpty()
+                if (crashFile != null || traceAvailableState.value) {
+                    val crashLog = crashFile?.let { DebugCrashLogger.read(it).orEmpty() }.orEmpty()
+                    val traceLog = DebugTraceLogger.read(this@MainActivity).orEmpty()
                     AlertDialog(
-                        onDismissRequest = { selectedCrashState.value = null; crashFilesState.value = emptyList() },
-                        title = { Text("Previous crash detected") },
-                        text = { Text("${file.name}\nSaved crash logs: ${crashFilesState.value.size}") },
+                        onDismissRequest = {
+                            selectedCrashState.value = null
+                            crashFilesState.value = emptyList()
+                            traceAvailableState.value = false
+                        },
+                        title = { Text("Diagnostic Logs") },
+                        text = {
+                            androidx.compose.foundation.layout.Column {
+                                if (crashFile != null) {
+                                    Text("Crash Logs: " + crashFilesState.value.size + "\n" + crashFile.name)
+                                    androidx.compose.foundation.layout.Row {
+                                        TextButton(onClick = {
+                                            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("NekoVideo crash log", crashLog))
+                                        }) { Text("Copy") }
+                                        TextButton(onClick = {
+                                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_SUBJECT, crashFile.name)
+                                                putExtra(Intent.EXTRA_TEXT, crashLog)
+                                            }
+                                            startActivity(Intent.createChooser(sendIntent, "Share crash log"))
+                                        }) { Text("Share") }
+                                        TextButton(onClick = {
+                                            DebugCrashLogger.delete(crashFile)
+                                            val remaining = DebugCrashLogger.list(this@MainActivity)
+                                            crashFilesState.value = remaining
+                                            selectedCrashState.value = remaining.firstOrNull()
+                                        }) { Text("Delete") }
+                                    }
+                                }
+                                if (traceAvailableState.value) {
+                                    Text("Hang/Trace Log")
+                                    androidx.compose.foundation.layout.Row {
+                                        TextButton(onClick = {
+                                            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("NekoVideo hang trace", traceLog))
+                                        }) { Text("Copy") }
+                                        TextButton(onClick = {
+                                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                                type = "text/plain"
+                                                putExtra(Intent.EXTRA_SUBJECT, "hang-trace.txt")
+                                                putExtra(Intent.EXTRA_TEXT, traceLog)
+                                            }
+                                            startActivity(Intent.createChooser(sendIntent, "Share hang/trace log"))
+                                        }) { Text("Share") }
+                                        TextButton(onClick = {
+                                            DebugTraceLogger.delete(this@MainActivity)
+                                            traceAvailableState.value = false
+                                        }) { Text("Delete") }
+                                    }
+                                }
+                            }
+                        },
                         confirmButton = {
                             TextButton(onClick = {
-                                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText("NekoVideo crash log", crashLog))
-                            }) { Text("Copy") }
-                        },
-                        dismissButton = {
-                            androidx.compose.foundation.layout.Row {
-                                TextButton(onClick = {
-                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_SUBJECT, file.name)
-                                        putExtra(Intent.EXTRA_TEXT, crashLog)
-                                    }
-                                    startActivity(Intent.createChooser(sendIntent, "Share crash log"))
-                                }) { Text("Share") }
-                                TextButton(onClick = {
-                                    DebugCrashLogger.delete(file)
-                                    val remaining = DebugCrashLogger.list(this@MainActivity)
-                                    crashFilesState.value = remaining
-                                    selectedCrashState.value = remaining.firstOrNull()
-                                }) { Text("Delete") }
-                                TextButton(onClick = {
-                                    selectedCrashState.value = null
-                                    crashFilesState.value = emptyList()
-                                }) { Text("Close") }
-                            }
+                                selectedCrashState.value = null
+                                crashFilesState.value = emptyList()
+                                traceAvailableState.value = false
+                            }) { Text("Close") }
                         }
                     )
                 }
