@@ -18,6 +18,7 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
 
     private val videoMap = ConcurrentHashMap<String, String>() // name -> path
     private val lockedVideoKeys = ConcurrentHashMap<String, ByteArray>() // name -> xorKey
+    var onVideoRequest: (() -> Unit)? = null
 
     fun addVideo(videoPath: String) {
         val videoName = File(videoPath).name
@@ -41,6 +42,7 @@ class LocalVideoServer(private val context: Context, port: Int = 8080) : NanoHTT
 
         // Formato: /video/nome_do_arquivo.mp4
         if (uri.startsWith("/video/")) {
+            onVideoRequest?.invoke()
             val videoName = java.net.URLDecoder.decode(uri.removePrefix("/video/"), "UTF-8")
             val videoPath = videoMap[videoName]
 
