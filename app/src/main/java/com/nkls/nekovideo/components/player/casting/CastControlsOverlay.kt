@@ -62,6 +62,8 @@ fun CastControlsOverlay(
     var showTrackInfoDialog by remember { mutableStateOf(false) }
     var showSlowPreparingPrompt by remember { mutableStateOf(false) }
     var preparingHasMediaActivity by remember { mutableStateOf(castManager.preparingMediaRequestSeen) }
+    var tvControlLocked by remember { mutableStateOf(castManager.tvControlLocked) }
+    var phoneControlSyncInProgress by remember { mutableStateOf(castManager.phoneControlSyncInProgress) }
 
     // Poll state from the DLNA manager
     LaunchedEffect(Unit) {
@@ -75,6 +77,8 @@ fun CastControlsOverlay(
                 currentVideoPath = castManager.currentVideoPath
             }
             preparingHasMediaActivity = castManager.preparingMediaRequestSeen
+            tvControlLocked = castManager.tvControlLocked
+            phoneControlSyncInProgress = castManager.phoneControlSyncInProgress
         }
     }
 
@@ -130,11 +134,12 @@ fun CastControlsOverlay(
 
     val isPreparing = controlState == DLNACastManager.CastControlState.PREPARING
     val isReadyPlaying = controlState == DLNACastManager.CastControlState.READY_PLAYING
-    val controlsEnabled = controlState == DLNACastManager.CastControlState.PREPARING ||
-        controlState == DLNACastManager.CastControlState.READY_PLAYING ||
-        controlState == DLNACastManager.CastControlState.READY_PAUSED ||
-        controlState == DLNACastManager.CastControlState.BROWSING ||
-        controlState == DLNACastManager.CastControlState.ERROR
+    val controlsEnabled = !tvControlLocked && !phoneControlSyncInProgress &&
+        (controlState == DLNACastManager.CastControlState.PREPARING ||
+            controlState == DLNACastManager.CastControlState.READY_PLAYING ||
+            controlState == DLNACastManager.CastControlState.READY_PAUSED ||
+            controlState == DLNACastManager.CastControlState.BROWSING ||
+            controlState == DLNACastManager.CastControlState.ERROR)
     val controlAlpha = if (controlsEnabled) 1f else 0.35f
 
     Box(
@@ -198,17 +203,45 @@ fun CastControlsOverlay(
                     )
                 }
 
-                IconButton(
-                    onClick = { showDisconnectDialog = true },
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                        .size(48.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CastConnected,
-                        contentDescription = stringResource(R.string.cast_disconnect_confirm),
-                        tint = Color(0xFF4CAF50)
-                    )
+                    IconButton(
+                        enabled = !phoneControlSyncInProgress &&
+                            (tvControlLocked ||
+                                controlState == DLNACastManager.CastControlState.READY_PLAYING ||
+                                controlState == DLNACastManager.CastControlState.READY_PAUSED),
+                        onClick = {
+                            if (tvControlLocked) castManager.takePhoneControl()
+                            else castManager.handControlToTv()
+                        },
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                            .size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (tvControlLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = stringResource(
+                                if (tvControlLocked) R.string.cast_take_phone_control
+                                else R.string.cast_hand_control_to_tv
+                            ),
+                            tint = if (tvControlLocked) Color(0xFFFFC107) else Color.White
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { showDisconnectDialog = true },
+                        modifier = Modifier
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                            .size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CastConnected,
+                            contentDescription = stringResource(R.string.cast_disconnect_confirm),
+                            tint = Color(0xFF4CAF50)
+                        )
+                    }
                 }
             }
         }
@@ -260,6 +293,28 @@ fun CastControlsOverlay(
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 14.sp
                 )
+
+                if (tvControlLocked || phoneControlSyncInProgress) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFFFFC107),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = stringResource(
+                                if (phoneControlSyncInProgress) R.string.cast_syncing_phone_control
+                                else R.string.cast_tv_controlling
+                            ),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 14.sp
+                        )
+                    }
+                }
 
                 when (controlState) {
                     DLNACastManager.CastControlState.PREPARING -> {
