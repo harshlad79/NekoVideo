@@ -60,6 +60,8 @@ fun CastControlsOverlay(
     var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var showTrackInfoDialog by remember { mutableStateOf(false) }
+    var showSlowPreparingPrompt by remember { mutableStateOf(false) }
+    var preparingHasMediaActivity by remember { mutableStateOf(castManager.preparingMediaRequestSeen) }
 
     // Poll state from the DLNA manager
     LaunchedEffect(Unit) {
@@ -71,6 +73,19 @@ fun CastControlsOverlay(
             if (castManager.currentTitle.isNotEmpty()) currentTitle = castManager.currentTitle
             if (castManager.currentVideoPath != currentVideoPath) {
                 currentVideoPath = castManager.currentVideoPath
+            }
+            preparingHasMediaActivity = castManager.preparingMediaRequestSeen
+        }
+    }
+
+    LaunchedEffect(controlState, currentVideoPath) {
+        showSlowPreparingPrompt = false
+        preparingHasMediaActivity = castManager.preparingMediaRequestSeen
+        if (controlState == DLNACastManager.CastControlState.PREPARING) {
+            delay(3_000)
+            if (castManager.controlState == DLNACastManager.CastControlState.PREPARING) {
+                preparingHasMediaActivity = castManager.preparingMediaRequestSeen
+                showSlowPreparingPrompt = true
             }
         }
     }
@@ -115,7 +130,8 @@ fun CastControlsOverlay(
 
     val isPreparing = controlState == DLNACastManager.CastControlState.PREPARING
     val isReadyPlaying = controlState == DLNACastManager.CastControlState.READY_PLAYING
-    val controlsEnabled = controlState == DLNACastManager.CastControlState.READY_PLAYING ||
+    val controlsEnabled = controlState == DLNACastManager.CastControlState.PREPARING ||
+        controlState == DLNACastManager.CastControlState.READY_PLAYING ||
         controlState == DLNACastManager.CastControlState.READY_PAUSED ||
         controlState == DLNACastManager.CastControlState.BROWSING ||
         controlState == DLNACastManager.CastControlState.ERROR
@@ -247,20 +263,51 @@ fun CastControlsOverlay(
 
                 when (controlState) {
                     DLNACastManager.CastControlState.PREPARING -> {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
-                            )
-                            Text(
-                                text = stringResource(R.string.cast_waiting_for_tv),
-                                color = Color.White.copy(alpha = 0.9f),
-                                fontSize = 14.sp
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = if (showSlowPreparingPrompt) {
+                                        stringResource(
+                                            if (preparingHasMediaActivity) R.string.cast_tv_analyzing_video
+                                            else R.string.cast_tv_slow_response
+                                        )
+                                    } else {
+                                        stringResource(R.string.cast_waiting_for_tv)
+                                    },
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 14.sp
+                                )
+                            }
+
+                            if (showSlowPreparingPrompt) {
+                                Text(
+                                    text = stringResource(R.string.cast_slow_prompt),
+                                    color = Color.White.copy(alpha = 0.75f),
+                                    fontSize = 13.sp
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { showSlowPreparingPrompt = false }) {
+                                        Text(stringResource(R.string.cast_keep_waiting))
+                                    }
+                                    TextButton(onClick = { castManager.cancelPreparingPlayback() }) {
+                                        Text(stringResource(R.string.cast_stop_attempt))
+                                    }
+                                    TextButton(onClick = { castManager.next() }) {
+                                        Text(stringResource(R.string.next))
+                                    }
+                                }
+                            }
                         }
                     }
                     DLNACastManager.CastControlState.BROWSING -> {
@@ -292,8 +339,11 @@ fun CastControlsOverlay(
                 IconButton(
                     enabled = controlsEnabled,
                     onClick = {
-                        if (isReadyPlaying) castManager.seekBy(-10_000L)
-                        else castManager.browsePrevious()
+                        when {
+                            isReadyPlaying -> castManager.seekBy(-10_000L)
+                            isPreparing -> castManager.previous()
+                            else -> castManager.browsePrevious()
+                        }
                     },
                     modifier = Modifier.size(56.dp)
                 ) {
@@ -311,14 +361,28 @@ fun CastControlsOverlay(
 
                 IconButton(
                     enabled = controlsEnabled,
-                    onClick = { if (isReadyPlaying) castManager.pause() else castManager.play() },
+                    onClick = {
+                        when {
+                            isPreparing -> castManager.cancelPreparingPlayback()
+                            isReadyPlaying -> castManager.pause()
+                            else -> castManager.play()
+                        }
+                    },
                     modifier = Modifier
                         .background(Color.White.copy(alpha = 0.9f), CircleShape)
                         .size(80.dp)
                 ) {
                     Icon(
-                        imageVector = if (isReadyPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isReadyPlaying) stringResource(R.string.pause) else stringResource(R.string.play),
+                        imageVector = when {
+                            isPreparing -> Icons.Default.Stop
+                            isReadyPlaying -> Icons.Default.Pause
+                            else -> Icons.Default.PlayArrow
+                        },
+                        contentDescription = when {
+                            isPreparing -> stringResource(R.string.cast_stop_attempt)
+                            isReadyPlaying -> stringResource(R.string.pause)
+                            else -> stringResource(R.string.play)
+                        },
                         tint = Color.Black,
                         modifier = Modifier.size(44.dp)
                     )
@@ -329,8 +393,11 @@ fun CastControlsOverlay(
                 IconButton(
                     enabled = controlsEnabled,
                     onClick = {
-                        if (isReadyPlaying) castManager.seekBy(10_000L)
-                        else castManager.browseNext()
+                        when {
+                            isReadyPlaying -> castManager.seekBy(10_000L)
+                            isPreparing -> castManager.next()
+                            else -> castManager.browseNext()
+                        }
                     },
                     modifier = Modifier.size(56.dp)
                 ) {
