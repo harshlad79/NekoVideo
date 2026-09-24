@@ -207,6 +207,7 @@ class MainActivity : AppCompatActivity() {
         DebugCrashLogger.install(this)
         super.onCreate(savedInstanceState)
         DebugTraceLogger.startSession(this)
+        DLNAMediaServerService.startIfEnabled(this)
 
         themeManager = ThemeManager(this)
         LanguageManager.initialize()
