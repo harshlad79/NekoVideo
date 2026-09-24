@@ -93,6 +93,10 @@ class DLNACastManager(private val context: Context) {
     @Volatile private var activeSeekInProgress = false
     @Volatile private var pauseSyncInProgress = false
     @Volatile private var pauseSyncJob: Job? = null
+    @Volatile var tvControlLocked = false
+        private set
+    @Volatile var phoneControlSyncInProgress = false
+        private set
     private var confirmedVideoPath = ""
     private var confirmedVideoUrl = ""
 
@@ -462,6 +466,8 @@ class DLNACastManager(private val context: Context) {
         connectedDevice = device
         saveLastDevice(device)
         isConnected = true
+        tvControlLocked = false
+        phoneControlSyncInProgress = false
         controlState = CastControlState.IDLE
         connectionListener?.invoke(true)
         onConnectionStateChanged?.invoke(true)
@@ -476,13 +482,15 @@ class DLNACastManager(private val context: Context) {
             while (isConnected) {
                 try {
                     val canQueryRenderer = !activeSeekInProgress && !pauseSyncInProgress &&
-                        (controlState == CastControlState.READY_PLAYING ||
+                        (tvControlLocked ||
+                            controlState == CastControlState.READY_PLAYING ||
                             controlState == CastControlState.READY_PAUSED)
 
                     if (canQueryRenderer) {
                         val pos = getPositionInfo()
                         val canApplyPosition = !activeSeekInProgress && !pauseSyncInProgress &&
-                            (controlState == CastControlState.READY_PLAYING ||
+                            (tvControlLocked ||
+                                controlState == CastControlState.READY_PLAYING ||
                                 controlState == CastControlState.READY_PAUSED)
                         if (pos != null && canApplyPosition) {
                             currentPositionMs = pos.first
@@ -499,17 +507,22 @@ class DLNACastManager(private val context: Context) {
                         }
 
                         val canApplyTransport = !activeSeekInProgress && !pauseSyncInProgress &&
-                            (controlState == CastControlState.READY_PLAYING ||
+                            (tvControlLocked ||
+                                controlState == CastControlState.READY_PLAYING ||
                                 controlState == CastControlState.READY_PAUSED)
                         if (canApplyTransport) {
                             isPlaying = rendererIsPlaying
                             when (transportState) {
                                 "PLAYING" -> controlState = CastControlState.READY_PLAYING
                                 "PAUSED_PLAYBACK" -> controlState = CastControlState.READY_PAUSED
+                                "STOPPED", "NO_MEDIA_PRESENT" -> if (tvControlLocked) {
+                                    controlState = CastControlState.BROWSING
+                                }
                             }
                         }
 
-                        if (wasPlaying && !rendererIsPlaying && !stoppedByUser && !isLoadingTrack &&
+                        if (!tvControlLocked &&
+                            wasPlaying && !rendererIsPlaying && !stoppedByUser && !isLoadingTrack &&
                             playlist.size > 1 && transportState != "PAUSED_PLAYBACK") {
                             withContext(Dispatchers.Main) { next() }
                         }
@@ -524,9 +537,102 @@ class DLNACastManager(private val context: Context) {
         }
     }
 
+    fun handControlToTv() {
+        if (!isConnected || phoneControlSyncInProgress) return
+        if (controlState != CastControlState.READY_PLAYING &&
+            controlState != CastControlState.READY_PAUSED) {
+            trace("CAST TV control skipped state=$controlState")
+            return
+        }
+        if (activeSeekInProgress || pauseSyncInProgress || isLoadingTrack) {
+            trace("CAST TV control skipped busy=true state=$controlState")
+            return
+        }
+
+        tvControlLocked = true
+        trace("CAST control owner=TV")
+        notifyStateChangedAsync()
+    }
+
+    fun takePhoneControl() {
+        if (!isConnected || !tvControlLocked || phoneControlSyncInProgress) return
+
+        phoneControlSyncInProgress = true
+        trace("CAST control owner sync TV->PHONE start")
+        notifyStateChangedAsync()
+
+        scope.launch {
+            var synced = false
+            var lastState: String? = null
+            try {
+                val deadline = System.currentTimeMillis() + 4_000L
+                while (isConnected && tvControlLocked && System.currentTimeMillis() < deadline) {
+                    val uri = getCurrentMediaUriOrNull()
+                    val state = getTransportStateOrNull()
+                    val pos = getPositionInfo()
+                    if (state != null) lastState = state
+
+                    val uriMatches = confirmedVideoUrl.isEmpty() ||
+                        uri.isNullOrBlank() ||
+                        mediaUrisMatch(uri, confirmedVideoUrl)
+
+                    if (uriMatches && state in setOf(
+                            "PLAYING",
+                            "PAUSED_PLAYBACK",
+                            "STOPPED",
+                            "NO_MEDIA_PRESENT"
+                        )) {
+                        if (pos != null) {
+                            currentPositionMs = pos.first
+                            durationMs = pos.second
+                            desiredPositionMs = pos.first
+                        }
+
+                        isPlaying = state == "PLAYING"
+                        isLoadingTrack = false
+                        controlState = when (state) {
+                            "PLAYING" -> CastControlState.READY_PLAYING
+                            "PAUSED_PLAYBACK" -> CastControlState.READY_PAUSED
+                            else -> CastControlState.BROWSING
+                        }
+                        tvControlLocked = false
+                        synced = true
+                        trace(
+                            "CAST control owner=PHONE state=$state " +
+                                "position=${msToTimeString(currentPositionMs)}"
+                        )
+                        break
+                    }
+
+                    delay(250)
+                }
+
+                if (!synced) {
+                    trace(
+                        "CAST control owner sync TV->PHONE failed " +
+                            "state=${lastState ?: "unknown"}; keeping TV control"
+                    )
+                }
+            } finally {
+                phoneControlSyncInProgress = false
+                notifyStateChanged()
+            }
+        }
+    }
+
+    private fun phonePlaybackControlBlocked(action: String): Boolean {
+        if (!tvControlLocked && !phoneControlSyncInProgress) return false
+        trace(
+            "CAST phone command blocked action=$action " +
+                "tvControl=$tvControlLocked sync=$phoneControlSyncInProgress"
+        )
+        return true
+    }
+
     // ── Casting ──────────────────────────────────────────────────────────────
 
     fun castVideo(videoPath: String, videoTitle: String) {
+        if (phonePlaybackControlBlocked("castVideo")) return
         trace("CAST 1 castVideo entered title=$videoTitle")
         playlist = listOf(videoPath)
         playlistTitles = listOf(videoTitle)
@@ -537,6 +643,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun castPlaylist(videosPaths: List<String>, videosTitles: List<String>, startIndex: Int = 0) {
+        if (phonePlaybackControlBlocked("castPlaylist")) return
         playlist = videosPaths
         playlistTitles = videosTitles
         currentIndex = startIndex
@@ -1350,6 +1457,7 @@ class DLNACastManager(private val context: Context) {
     // ── Playback controls ────────────────────────────────────────────────────
 
     fun play() {
+        if (phonePlaybackControlBlocked("play")) return
         when (controlState) {
             CastControlState.BROWSING, CastControlState.ERROR -> {
                 val path = currentVideoPath
@@ -1390,6 +1498,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun pause() {
+        if (phonePlaybackControlBlocked("pause")) return
         if (controlState != CastControlState.READY_PLAYING) return
         val device = connectedDevice ?: return
         val pauseGeneration = latestRequestGeneration
@@ -1443,6 +1552,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun seekTo(posMs: Long) {
+        if (phonePlaybackControlBlocked("seekTo")) return
         val bounded = if (durationMs > 0L) {
             posMs.coerceIn(0L, durationMs)
         } else {
@@ -1721,6 +1831,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun cancelPreparingPlayback() {
+        if (phonePlaybackControlBlocked("cancelPreparingPlayback")) return
         if (controlState != CastControlState.PREPARING) return
         val generation = nextRequestGeneration()
         activeSeekInProgress = false
@@ -1749,6 +1860,7 @@ class DLNACastManager(private val context: Context) {
     fun browsePrevious() = browseBy(-1)
 
     private fun browseBy(delta: Int) {
+        if (phonePlaybackControlBlocked("browseBy")) return
         if (playlist.isEmpty()) return
         if (controlState != CastControlState.READY_PAUSED &&
             controlState != CastControlState.BROWSING &&
@@ -1849,6 +1961,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun next() {
+        if (phonePlaybackControlBlocked("next")) return
         if (playlist.isEmpty()) return
         currentIndex = (currentIndex + 1) % playlist.size
         val path = playlist[currentIndex]
@@ -1857,6 +1970,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun previous() {
+        if (phonePlaybackControlBlocked("previous")) return
         if (playlist.isEmpty()) return
         currentIndex = (currentIndex - 1 + playlist.size) % playlist.size
         val path = playlist[currentIndex]
@@ -1865,6 +1979,7 @@ class DLNACastManager(private val context: Context) {
     }
 
     fun stopPlayback() {
+        if (phonePlaybackControlBlocked("stopPlayback")) return
         stoppedByUser = true
         playlist = listOf()
         playlistTitles = listOf()
@@ -1891,6 +2006,8 @@ class DLNACastManager(private val context: Context) {
     fun disconnect() {
         isConnected = false
         isPlaying = false
+        tvControlLocked = false
+        phoneControlSyncInProgress = false
         isLoadingTrack = false
         controlState = CastControlState.DISCONNECTED
         confirmedVideoPath = ""
