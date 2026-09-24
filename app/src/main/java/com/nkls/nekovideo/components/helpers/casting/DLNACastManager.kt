@@ -209,6 +209,8 @@ class DLNACastManager(private val context: Context) {
     @Volatile var preparingMediaRequestSeen: Boolean = false
         private set
     private val deviceDescriptionCache = ConcurrentHashMap<String, DLNADevice>()
+    @Volatile private var discoveryGeneration = 0L
+    @Volatile private var discoveryJob: Job? = null
 
     private var connectionListener: ((Boolean) -> Unit)? = null
 
@@ -219,20 +221,25 @@ class DLNACastManager(private val context: Context) {
     // ── Discovery ────────────────────────────────────────────────────────────
 
     fun discoverDevices() {
-        scope.launch {
+        val generation = ++discoveryGeneration
+        discoveryJob?.cancel()
+        discoveryJob = scope.launch {
             val found = mutableListOf<DLNADevice>()
             val foundLock = Any()
             val seenLocations = ConcurrentHashMap.newKeySet<String>()
+            var socket: MulticastSocket? = null
 
             suspend fun publish(device: DLNADevice) {
                 val snapshot = synchronized(foundLock) {
-                    if (found.none { it.controlUrl == device.controlUrl || it.baseUrl == device.baseUrl }) {
+                    if (found.none { sameDevice(it, device) }) {
                         found.add(device)
                     }
                     found.toList()
                 }
                 withContext(Dispatchers.Main) {
-                    onDevicesFound?.invoke(snapshot)
+                    if (generation == discoveryGeneration) {
+                        onDevicesFound?.invoke(snapshot)
+                    }
                 }
             }
 
@@ -275,9 +282,14 @@ class DLNACastManager(private val context: Context) {
                             iface.inetAddresses.asSequence().any { it is Inet4Address && !it.isLoopbackAddress }
                     }
 
+                trace(
+                    "DISCOVERY start generation=$generation local=${wifiAddr?.hostAddress ?: "unknown"} " +
+                        "iface=${wifiIface?.name ?: "unknown"}"
+                )
+
                 val group = InetAddress.getByName("239.255.255.250")
                 val bindAddr = wifiAddr ?: InetAddress.getByName("0.0.0.0")
-                val socket = MulticastSocket(null).apply {
+                socket = MulticastSocket(null).apply {
                     bind(InetSocketAddress(bindAddr, 0))
                     soTimeout = 350
                     if (wifiIface != null) {
@@ -298,11 +310,11 @@ class DLNACastManager(private val context: Context) {
                 }.toByteArray()
 
                 val fast = searchPacket(1)
-                socket.send(DatagramPacket(fast, fast.size, group, 1900))
+                socket!!.send(DatagramPacket(fast, fast.size, group, 1900))
                 trace("DISCOVERY M-SEARCH fast MX=1")
                 delay(180)
                 val fallback = searchPacket(3)
-                socket.send(DatagramPacket(fallback, fallback.size, group, 1900))
+                socket!!.send(DatagramPacket(fallback, fallback.size, group, 1900))
                 trace("DISCOVERY M-SEARCH fallback MX=3")
 
                 coroutineScope {
@@ -314,10 +326,14 @@ class DLNACastManager(private val context: Context) {
                     while (System.currentTimeMillis() < deadline) {
                         try {
                             val pkt = DatagramPacket(respBuf, respBuf.size)
-                            socket.receive(pkt)
+                            socket!!.receive(pkt)
                             packetCount++
                             val response = String(pkt.data, 0, pkt.length)
                             val location = extractHeader(response, "LOCATION") ?: continue
+                            trace(
+                                "DISCOVERY packet source=${pkt.address?.hostAddress ?: "unknown"} " +
+                                    "location=$location"
+                            )
                             if (!seenLocations.add(location)) continue
                             descriptionJobs += launch(Dispatchers.IO) {
                                 val device = fetchDeviceDescription(location)
@@ -330,23 +346,57 @@ class DLNACastManager(private val context: Context) {
                         }
                     }
 
-                    socket.close()
                     descriptionJobs.forEach { it.join() }
                     val count = synchronized(foundLock) { found.size }
-                    trace("DISCOVERY done packets=$packetCount devices=$count")
+                    trace("DISCOVERY done generation=$generation packets=$packetCount devices=$count")
                 }
+            } catch (e: CancellationException) {
+                trace("DISCOVERY stopped generation=$generation")
+                throw e
             } catch (e: Exception) {
                 Log.e(tag, "SSDP discovery error", e)
+                trace("DISCOVERY error generation=$generation ${e.javaClass.simpleName}: ${e.message}")
             } finally {
-                multicastLock.release()
-                cachedProbe?.join()
-                withContext(Dispatchers.Main) {
-                    onDevicesFound?.invoke(synchronized(foundLock) { found.toList() })
-                    onDiscoveryFinished?.invoke()
+                socket?.close()
+                cachedProbe?.cancel()
+                if (multicastLock.isHeld) multicastLock.release()
+
+                if (generation == discoveryGeneration) {
+                    discoveryJob = null
+                    withContext(NonCancellable + Dispatchers.Main) {
+                        onDevicesFound?.invoke(synchronized(foundLock) { found.toList() })
+                        onDiscoveryFinished?.invoke()
+                    }
                 }
             }
         }
     }
+
+    fun stopDiscovery() {
+        discoveryGeneration++
+        discoveryJob?.cancel()
+        discoveryJob = null
+        trace("DISCOVERY stop requested")
+    }
+
+    fun getSavedDevice(): DLNADevice? = loadLastDevice()
+
+    fun forgetSavedDevice(device: DLNADevice): Boolean {
+        val saved = loadLastDevice() ?: return false
+        if (!sameDevice(saved, device)) return false
+
+        context.getSharedPreferences("dlna_cast", Context.MODE_PRIVATE)
+            .edit()
+            .remove("last_name")
+            .remove("last_control_url")
+            .remove("last_base_url")
+            .apply()
+        trace("DISCOVERY forgot saved device name=${device.name}")
+        return true
+    }
+
+    private fun sameDevice(a: DLNADevice, b: DLNADevice): Boolean =
+        a.controlUrl == b.controlUrl || a.baseUrl == b.baseUrl
 
     private fun loadLastDevice(): DLNADevice? {
         val prefs = context.getSharedPreferences("dlna_cast", Context.MODE_PRIVATE)
