@@ -115,6 +115,17 @@ fun TopBar(
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var discoveredDevices by remember { mutableStateOf<List<DLNACastManager.DLNADevice>>(emptyList()) }
     var isDiscovering by remember { mutableStateOf(false) }
+    var savedCastDevice by remember { mutableStateOf(castManager.getSavedDevice()) }
+
+    fun mergeDiscoveredDevices(incoming: List<DLNACastManager.DLNADevice>) {
+        val merged = discoveredDevices.toMutableList()
+        incoming.forEach { device ->
+            if (merged.none { it.controlUrl == device.controlUrl || it.baseUrl == device.baseUrl }) {
+                merged += device
+            }
+        }
+        discoveredDevices = merged
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -127,7 +138,30 @@ fun TopBar(
         DLNADevicePickerDialog(
             devices = discoveredDevices,
             isDiscovering = isDiscovering,
+            savedDevice = savedCastDevice,
+            onDiscoveryToggle = {
+                if (isDiscovering) {
+                    castManager.stopDiscovery()
+                    isDiscovering = false
+                } else {
+                    isDiscovering = true
+                    castManager.onDevicesFound = { devices ->
+                        mergeDiscoveredDevices(devices)
+                    }
+                    castManager.onDiscoveryFinished = {
+                        isDiscovering = false
+                    }
+                    castManager.discoverDevices()
+                }
+            },
+            onForgetDevice = { device ->
+                if (castManager.forgetSavedDevice(device)) {
+                    savedCastDevice = null
+                }
+            },
             onDeviceSelected = { device ->
+                castManager.stopDiscovery()
+                isDiscovering = false
                 showDevicePicker = false
                 castManager.connectToDevice(device)
                 isCasting = true
@@ -143,7 +177,11 @@ fun TopBar(
                     castManager.castPlaylist(localPlaylist, titles, PlaylistManager.getCurrentIndex())
                 }
             },
-            onDismiss = { showDevicePicker = false }
+            onDismiss = {
+                castManager.stopDiscovery()
+                isDiscovering = false
+                showDevicePicker = false
+            }
         )
     }
 
@@ -437,10 +475,13 @@ fun TopBar(
                         showDisconnectDialog = true
                     } else {
                         discoveredDevices = emptyList()
+                        savedCastDevice = castManager.getSavedDevice()
                         isDiscovering = true
                         showDevicePicker = true
                         castManager.onDevicesFound = { devices ->
-                            discoveredDevices = devices
+                            mergeDiscoveredDevices(devices)
+                        }
+                        castManager.onDiscoveryFinished = {
                             isDiscovering = false
                         }
                         castManager.discoverDevices()
