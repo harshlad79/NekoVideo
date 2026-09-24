@@ -523,7 +523,9 @@ class DLNACastManager(private val context: Context) {
 
                         if (!tvControlLocked &&
                             wasPlaying && !rendererIsPlaying && !stoppedByUser && !isLoadingTrack &&
-                            playlist.size > 1 && transportState != "PAUSED_PLAYBACK") {
+                            playlist.size > 1 &&
+                            transportState in setOf("STOPPED", "NO_MEDIA_PRESENT")) {
+                            trace("CAST auto-next renderer stopped state=$transportState")
                             withContext(Dispatchers.Main) { next() }
                         }
 
