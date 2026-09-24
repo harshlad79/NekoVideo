@@ -96,26 +96,64 @@ class DLNACastManager(private val context: Context) {
     private var confirmedVideoUrl = ""
 
     private val castWorkerJob = scope.launch {
-        for (request in castRequests) {
+        var pendingRequest: CastRequest? = null
+
+        while (isActive) {
+            val request = pendingRequest ?: castRequests.receive()
+            pendingRequest = null
+
             val workerStartedAtMs = System.currentTimeMillis()
             activeCastWorkerGeneration = request.generation
             trace(
                 "CAST worker enter generation=${request.generation} " +
                     "queueWaitMs=${workerStartedAtMs - request.queuedAtMs}"
             )
-            try {
+
+            val requestJob = launch {
                 processCastRequest(request)
-            } finally {
-                val finishedAtMs = System.currentTimeMillis()
-                trace(
-                    "CAST worker leave generation=${request.generation} " +
-                        "workerMs=${finishedAtMs - workerStartedAtMs} " +
-                        "totalSinceQueueMs=${finishedAtMs - request.queuedAtMs} " +
-                        "current=${request.generation == latestRequestGeneration}"
-                )
-                if (activeCastWorkerGeneration == request.generation) {
-                    activeCastWorkerGeneration = null
+            }
+
+            var supersedingRequest: CastRequest? = null
+            while (requestJob.isActive && supersedingRequest == null) {
+                kotlinx.coroutines.selects.select<Unit> {
+                    requestJob.onJoin { }
+                    castRequests.onReceive { newer ->
+                        supersedingRequest = newer
+                        trace(
+                            "CAST worker supersede running=${request.generation} " +
+                                "by=${newer.generation}"
+                        )
+                        requestJob.cancel(
+                            CancellationException(
+                                "Superseded by cast generation ${newer.generation}"
+                            )
+                        )
+                    }
                 }
+            }
+
+            if (supersedingRequest != null) {
+                requestJob.cancelAndJoin()
+
+                var latest = supersedingRequest!!
+                while (true) {
+                    val newer = castRequests.tryReceive().getOrNull() ?: break
+                    latest = newer
+                }
+                pendingRequest = latest
+            } else {
+                requestJob.join()
+            }
+
+            val finishedAtMs = System.currentTimeMillis()
+            trace(
+                "CAST worker leave generation=${request.generation} " +
+                    "workerMs=${finishedAtMs - workerStartedAtMs} " +
+                    "totalSinceQueueMs=${finishedAtMs - request.queuedAtMs} " +
+                    "current=${request.generation == latestRequestGeneration}"
+            )
+            if (activeCastWorkerGeneration == request.generation) {
+                activeCastWorkerGeneration = null
             }
         }
     }
@@ -861,7 +899,15 @@ class DLNACastManager(private val context: Context) {
             }
 
             if (!isCurrentRequest(request)) return
-            val shouldSeek = desiredPositionExplicit || request.seekOnStart
+            val requestedSeek = desiredPositionExplicit || request.seekOnStart
+            val targetPosition = desiredPositionMs
+            val shouldSeek = requestedSeek && targetPosition > 1_000L
+            if (requestedSeek && !shouldSeek) {
+                trace(
+                    "CAST pending seek skipped near zero generation=${request.generation} " +
+                        "target=${msToTimeString(targetPosition)}"
+                )
+            }
             val snapshot: RendererSnapshot
 
             if (shouldSeek) {
@@ -880,7 +926,6 @@ class DLNACastManager(private val context: Context) {
                 }
 
                 if (!isCurrentRequest(request)) return
-                val targetPosition = desiredPositionMs
                 trace("CAST apply pending seek generation=${request.generation} target=${msToTimeString(targetPosition)}")
                 val seekResult = sendSoapCommand(
                     device.controlUrl,
@@ -925,6 +970,9 @@ class DLNACastManager(private val context: Context) {
             }
 
             markRequestReady(request, url, snapshot)
+        } catch (e: CancellationException) {
+            trace("CAST cancelled generation=${request.generation} reason=${e.message ?: "superseded"}")
+            throw e
         } catch (e: Exception) {
             Log.e(tag, "loadAndPlay error", e)
             trace("CAST ERROR generation=${request.generation} ${e.javaClass.simpleName}: ${e.message}")
