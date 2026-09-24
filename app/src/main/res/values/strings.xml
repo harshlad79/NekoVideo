@@ -95,6 +95,10 @@
     <string name="cast_device_full_name">Device name</string>
     <string name="ok">OK</string>
     <string name="cast_playing_on">Playing on</string>
+    <string name="cast_hand_control_to_tv">Let TV control playback</string>
+    <string name="cast_take_phone_control">Take control on phone</string>
+    <string name="cast_tv_controlling">TV is controlling playback</string>
+    <string name="cast_syncing_phone_control">Syncing TV state to phone…</string>
     <string name="cast_waiting_for_tv">Waiting for the TV…</string>
     <string name="cast_tv_slow_response">The TV is taking longer than usual to respond.</string>
     <string name="cast_tv_analyzing_video">The TV is still analyzing this video.</string>
