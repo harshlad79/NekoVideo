@@ -89,6 +89,11 @@
     <string name="available_devices">Available devices</string>
     <string name="refresh">Refresh</string>
     <string name="select_cast_device">Select cast device</string>
+    <string name="cast_stop_discovery">Stop discovery</string>
+    <string name="cast_resume_discovery">Resume discovery</string>
+    <string name="cast_forget_device">Forget saved device</string>
+    <string name="cast_device_full_name">Device name</string>
+    <string name="ok">OK</string>
     <string name="cast_playing_on">Playing on</string>
     <string name="cast_waiting_for_tv">Waiting for the TV…</string>
     <string name="cast_tv_slow_response">The TV is taking longer than usual to respond.</string>
