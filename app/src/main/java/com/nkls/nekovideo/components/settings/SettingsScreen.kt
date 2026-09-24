@@ -109,6 +109,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.nkls.nekovideo.BuildConfig
+import com.nkls.nekovideo.DLNAMediaServerService
 import com.nkls.nekovideo.R
 import com.nkls.nekovideo.language.LanguageManager
 import com.nkls.nekovideo.theme.ThemeManager
@@ -744,6 +745,9 @@ fun StorageSettingsScreen() {
     val coroutineScope = rememberCoroutineScope()
     var thumbnailCacheBytes by remember { mutableStateOf(0L) }
     var watchHistoryBytes by remember { mutableStateOf(0L) }
+    var dlnaServerEnabled by remember {
+        mutableStateOf(DLNAMediaServerService.isEnabled(context))
+    }
 
     fun updateStorageUsage() {
         coroutineScope.launch {
@@ -779,6 +783,24 @@ fun StorageSettingsScreen() {
                 .padding(if (isCompact) 8.dp else 16.dp),
             verticalArrangement = Arrangement.spacedBy(if (isCompact) 6.dp else 12.dp)
         ) {
+            item {
+                SettingsSectionHeader(stringResource(R.string.dlna_server_section), isCompact)
+            }
+
+            item {
+                SettingsSwitchItem(
+                    icon = Icons.Default.Storage,
+                    title = stringResource(R.string.dlna_server_advertise),
+                    subtitle = stringResource(R.string.dlna_server_advertise_desc),
+                    checked = dlnaServerEnabled,
+                    onCheckedChange = { enabled ->
+                        dlnaServerEnabled = enabled
+                        DLNAMediaServerService.setEnabled(context, enabled)
+                    },
+                    isCompact = isCompact
+                )
+            }
+
             item {
                 SettingsSectionHeader(stringResource(R.string.storage_thumbnails_section), isCompact)
             }
