@@ -113,6 +113,12 @@
     <string name="cast_notification_channel_name">Cast Controls</string>
     <string name="cast_notification_casting_to">Casting to %s</string>
     <string name="cast_notification_idle">Ready to cast</string>
+    <string name="dlna_server_section">DLNA Media Server</string>
+    <string name="dlna_server_advertise">Advertise on local network</string>
+    <string name="dlna_server_advertise_desc">Makes NekoVideo visible to TVs and other DLNA devices. Internal storage is exposed as the browse root while this is enabled.</string>
+    <string name="dlna_server_notification_channel">DLNA Media Server</string>
+    <string name="dlna_server_notification_title">DLNA media server active</string>
+    <string name="dlna_server_notification_text">NekoVideo is being advertised on your local network.</string>
     <string name="cast_tracks_info_title">Subtitles and audio on Cast</string>
     <string name="cast_tracks_info_message">When casting through DLNA, NekoVideo sends the video to the receiving device, but subtitle and audio track controls depend on the Smart TV, TV Box, or other device playing it.\n\nIf the video has subtitles or more than one audio track, open the playback options on the receiving device and check whether it detects those tracks so you can switch them there.\n\nNot every DLNA device supports changing subtitles or audio during casting.</string>
     <string name="previous">Previous</string>
