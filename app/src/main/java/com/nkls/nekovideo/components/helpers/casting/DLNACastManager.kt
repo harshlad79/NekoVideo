@@ -16,6 +16,7 @@ import java.io.File
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * DLNA/UPnP cast manager — open-source replacement for Google Cast SDK.
@@ -196,12 +197,18 @@ class DLNACastManager(private val context: Context) {
 
     var onConnectionStateChanged: ((Boolean) -> Unit)? = null
     var onDevicesFound: ((List<DLNADevice>) -> Unit)? = null
+    var onDiscoveryFinished: (() -> Unit)? = null
     var onStateChanged: (() -> Unit)? = null
     // Separate observer for DLNACastService (avoids overwriting onStateChanged from UI)
     var onServiceStateChanged: (() -> Unit)? = null
 
     private var stoppedByUser = false
     private var isLoadingTrack = false
+    @Volatile var preparingStartedAtMs: Long = 0L
+        private set
+    @Volatile var preparingMediaRequestSeen: Boolean = false
+        private set
+    private val deviceDescriptionCache = ConcurrentHashMap<String, DLNADevice>()
 
     private var connectionListener: ((Boolean) -> Unit)? = null
 
@@ -214,6 +221,32 @@ class DLNACastManager(private val context: Context) {
     fun discoverDevices() {
         scope.launch {
             val found = mutableListOf<DLNADevice>()
+            val foundLock = Any()
+            val seenLocations = ConcurrentHashMap.newKeySet<String>()
+
+            suspend fun publish(device: DLNADevice) {
+                val snapshot = synchronized(foundLock) {
+                    if (found.none { it.controlUrl == device.controlUrl || it.baseUrl == device.baseUrl }) {
+                        found.add(device)
+                    }
+                    found.toList()
+                }
+                withContext(Dispatchers.Main) {
+                    onDevicesFound?.invoke(snapshot)
+                }
+            }
+
+            val cachedDevice = loadLastDevice()
+            val cachedProbe = cachedDevice?.let { cached ->
+                launch {
+                    if (probeDeviceQuick(cached)) {
+                        trace("DISCOVERY cached device alive name=${cached.name}")
+                        publish(cached)
+                    } else {
+                        trace("DISCOVERY cached device probe failed name=${cached.name}")
+                    }
+                }
+            }
 
             val wifiManager = context.applicationContext
                 .getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -221,10 +254,8 @@ class DLNACastManager(private val context: Context) {
                 setReferenceCounted(false)
                 acquire()
             }
-            Log.d(tag, "MulticastLock acquired: ${multicastLock.isHeld}")
 
             try {
-                // Resolve WiFi interface via WifiManager IP (reliable on API 30+)
                 @Suppress("DEPRECATION")
                 val wifiIpInt = wifiManager.connectionInfo.ipAddress
                 val wifiAddr = if (wifiIpInt != 0) {
@@ -232,99 +263,121 @@ class DLNACastManager(private val context: Context) {
                         ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(wifiIpInt).array()
                     )
                 } else null
-                Log.d(tag, "WiFi IP from WifiManager: $wifiAddr")
 
                 val wifiIface = wifiAddr?.let { addr ->
                     NetworkInterface.getNetworkInterfaces()
                         ?.asSequence()
-                        ?.firstOrNull { iface ->
-                            iface.inetAddresses.asSequence().any { it == addr }
-                        }
+                        ?.firstOrNull { iface -> iface.inetAddresses.asSequence().any { it == addr } }
                 } ?: NetworkInterface.getNetworkInterfaces()
                     ?.asSequence()
                     ?.firstOrNull { iface ->
                         iface.isUp && !iface.isLoopback &&
                             iface.inetAddresses.asSequence().any { it is Inet4Address && !it.isLoopbackAddress }
                     }
-                Log.d(tag, "Using network interface: ${wifiIface?.name} / ${wifiIface?.inetAddresses?.asSequence()?.toList()}")
 
                 val group = InetAddress.getByName("239.255.255.250")
                 val bindAddr = wifiAddr ?: InetAddress.getByName("0.0.0.0")
-
                 val socket = MulticastSocket(null).apply {
-                    // Bind to WiFi IP so send and receive both use WiFi interface
                     bind(InetSocketAddress(bindAddr, 0))
-                    soTimeout = 500
+                    soTimeout = 350
                     if (wifiIface != null) {
-                        networkInterface = wifiIface          // forces multicast SEND on WiFi
+                        networkInterface = wifiIface
                         joinGroup(InetSocketAddress(group, 1900), wifiIface)
                     } else {
                         @Suppress("DEPRECATION")
                         joinGroup(group)
                     }
                 }
-                Log.d(tag, "Socket bound to ${socket.localAddress}:${socket.localPort}")
 
-                val search = buildString {
+                fun searchPacket(mx: Int): ByteArray = buildString {
                     append("M-SEARCH * HTTP/1.1\r\n")
                     append("HOST: 239.255.255.250:1900\r\n")
                     append("MAN: \"ssdp:discover\"\r\n")
-                    append("MX: 3\r\n")
+                    append("MX: $mx\r\n")
                     append("ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n")
-                }
-                val buf = search.toByteArray()
+                }.toByteArray()
 
-                // Send M-SEARCH twice — some devices miss the first packet
-                repeat(2) {
-                    socket.send(DatagramPacket(buf, buf.size, group, 1900))
-                    Log.d(tag, "M-SEARCH sent (attempt ${it + 1})")
-                    delay(200)
-                }
+                val fast = searchPacket(1)
+                socket.send(DatagramPacket(fast, fast.size, group, 1900))
+                trace("DISCOVERY M-SEARCH fast MX=1")
+                delay(180)
+                val fallback = searchPacket(3)
+                socket.send(DatagramPacket(fallback, fallback.size, group, 1900))
+                trace("DISCOVERY M-SEARCH fallback MX=3")
 
-                val deadline = System.currentTimeMillis() + 4000L
-                val respBuf = ByteArray(4096)
-                var packetCount = 0
-                while (System.currentTimeMillis() < deadline) {
-                    try {
-                        val pkt = DatagramPacket(respBuf, respBuf.size)
-                        socket.receive(pkt)
-                        packetCount++
-                        val response = String(pkt.data, 0, pkt.length)
-                        Log.d(tag, "SSDP packet #$packetCount from ${pkt.address}:\n$response")
+                coroutineScope {
+                    val descriptionJobs = mutableListOf<Job>()
+                    val deadline = System.currentTimeMillis() + 4_000L
+                    val respBuf = ByteArray(4096)
+                    var packetCount = 0
 
-                        val location = extractHeader(response, "LOCATION")
-                        if (location == null) {
-                            Log.d(tag, "  → no LOCATION header, skipping")
-                            continue
+                    while (System.currentTimeMillis() < deadline) {
+                        try {
+                            val pkt = DatagramPacket(respBuf, respBuf.size)
+                            socket.receive(pkt)
+                            packetCount++
+                            val response = String(pkt.data, 0, pkt.length)
+                            val location = extractHeader(response, "LOCATION") ?: continue
+                            if (!seenLocations.add(location)) continue
+                            descriptionJobs += launch(Dispatchers.IO) {
+                                val device = fetchDeviceDescription(location)
+                                if (device != null) {
+                                    trace("DISCOVERY device ready name=${device.name}")
+                                    publish(device)
+                                }
+                            }
+                        } catch (_: SocketTimeoutException) {
                         }
-                        Log.d(tag, "  → fetching device description: $location")
-                        val device = fetchDeviceDescription(location)
-                        if (device != null && found.none { it.baseUrl == device.baseUrl }) {
-                            Log.d(tag, "  → device added: ${device.name} @ ${device.controlUrl}")
-                            found.add(device)
-                        } else if (device == null) {
-                            Log.w(tag, "  → fetchDeviceDescription returned null for $location")
-                        }
-                    } catch (_: SocketTimeoutException) {
-                        // keep looping until deadline
                     }
+
+                    socket.close()
+                    descriptionJobs.forEach { it.join() }
+                    val count = synchronized(foundLock) { found.size }
+                    trace("DISCOVERY done packets=$packetCount devices=$count")
                 }
-                Log.d(tag, "Discovery done. Packets received: $packetCount, devices found: ${found.size}")
-                socket.close()
             } catch (e: Exception) {
                 Log.e(tag, "SSDP discovery error", e)
             } finally {
                 multicastLock.release()
-                Log.d(tag, "MulticastLock released")
-            }
-
-            withContext(Dispatchers.Main) {
-                onDevicesFound?.invoke(found)
+                cachedProbe?.join()
+                withContext(Dispatchers.Main) {
+                    onDevicesFound?.invoke(synchronized(foundLock) { found.toList() })
+                    onDiscoveryFinished?.invoke()
+                }
             }
         }
     }
 
+    private fun loadLastDevice(): DLNADevice? {
+        val prefs = context.getSharedPreferences("dlna_cast", Context.MODE_PRIVATE)
+        val name = prefs.getString("last_name", null) ?: return null
+        val controlUrl = prefs.getString("last_control_url", null) ?: return null
+        val baseUrl = prefs.getString("last_base_url", null) ?: return null
+        return DLNADevice(name, controlUrl, baseUrl)
+    }
+
+    private fun saveLastDevice(device: DLNADevice) {
+        context.getSharedPreferences("dlna_cast", Context.MODE_PRIVATE)
+            .edit()
+            .putString("last_name", device.name)
+            .putString("last_control_url", device.controlUrl)
+            .putString("last_base_url", device.baseUrl)
+            .apply()
+    }
+
+    private fun probeDeviceQuick(device: DLNADevice): Boolean {
+        return sendSoapRequest(
+            controlUrl = device.controlUrl,
+            action = "GetTransportInfo",
+            args = "",
+            persistentTrace = false,
+            connectTimeoutMs = 700,
+            readTimeoutMs = 700
+        ).isSuccess
+    }
+
     private fun fetchDeviceDescription(location: String): DLNADevice? {
+        deviceDescriptionCache[location]?.let { return it }
         return try {
             val url = URL(location)
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -341,7 +394,9 @@ class DLNACastManager(private val context: Context) {
                 if (block.contains("AVTransport", ignoreCase = true)) {
                     val path = extractXmlTag(block, "controlURL") ?: continue
                     val controlUrl = if (path.startsWith("http")) path else "$baseUrl$path"
-                    return DLNADevice(friendlyName, controlUrl, baseUrl)
+                    return DLNADevice(friendlyName, controlUrl, baseUrl).also {
+                        deviceDescriptionCache[location] = it
+                    }
                 }
             }
             null
@@ -355,6 +410,7 @@ class DLNACastManager(private val context: Context) {
 
     fun connectToDevice(device: DLNADevice) {
         connectedDevice = device
+        saveLastDevice(device)
         isConnected = true
         controlState = CastControlState.IDLE
         connectionListener?.invoke(true)
@@ -1816,7 +1872,9 @@ class DLNACastManager(private val context: Context) {
         controlUrl: String,
         action: String,
         args: String,
-        persistentTrace: Boolean
+        persistentTrace: Boolean,
+        connectTimeoutMs: Int = 3000,
+        readTimeoutMs: Int = 3000
     ): SoapResult {
         var conn: HttpURLConnection? = null
         return try {
@@ -1834,8 +1892,8 @@ class DLNACastManager(private val context: Context) {
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
-                connectTimeout = 3000
-                readTimeout = 3000
+                connectTimeout = connectTimeoutMs
+                readTimeout = readTimeoutMs
                 setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
                 setRequestProperty(
                     "SOAPAction",
