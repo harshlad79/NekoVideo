@@ -983,7 +983,7 @@ class DLNACastManager(private val context: Context) {
                     request = request,
                     expectedUrl = url,
                     timeoutMs = 15_000,
-                    graceMs = 15_000
+                    graceMs = 5_000
                 )
                 if (!started) {
                     if (isCurrentRequest(request)) {
@@ -1026,7 +1026,7 @@ class DLNACastManager(private val context: Context) {
                     request = request,
                     expectedUrl = url,
                     timeoutMs = 15_000,
-                    graceMs = 15_000,
+                    graceMs = 5_000,
                     reason = "after-play"
                 ) ?: run {
                     if (isCurrentRequest(request)) {
@@ -1091,10 +1091,14 @@ class DLNACastManager(private val context: Context) {
                     return true
                 }
 
-                if (!graceUsed && uriMatches && finalState == "TRANSITIONING") {
+                if (!graceUsed && graceMs > 0L && uriMatches &&
+                    finalState == "TRANSITIONING" && preparingMediaRequestSeen) {
                     graceUsed = true
                     deadline = System.currentTimeMillis() + graceMs
-                    trace("CAST wait[pre-seek-play] grace generation=${request.generation} +${graceMs}ms")
+                    trace(
+                        "CAST wait[pre-seek-play] progress-grace generation=${request.generation} " +
+                            "+${graceMs}ms mediaRequestSeen=true"
+                    )
                 } else {
                     trace(
                         "CAST wait[pre-seek-play] timeout/superseded generation=${request.generation} " +
@@ -1173,10 +1177,14 @@ class DLNACastManager(private val context: Context) {
                     return RendererSnapshot(finalState, finalPos.first, finalPos.second)
                 }
 
-                if (!graceUsed && graceMs > 0L && finalUriMatches && finalState == "TRANSITIONING") {
+                if (!graceUsed && graceMs > 0L && finalUriMatches &&
+                    finalState == "TRANSITIONING" && preparingMediaRequestSeen) {
                     graceUsed = true
                     deadline = System.currentTimeMillis() + graceMs
-                    trace("CAST wait[$reason] grace generation=${request.generation} +${graceMs}ms")
+                    trace(
+                        "CAST wait[$reason] progress-grace generation=${request.generation} " +
+                            "+${graceMs}ms mediaRequestSeen=true"
+                    )
                 } else {
                     trace(
                         "CAST wait[$reason] timeout/superseded generation=${request.generation} " +
