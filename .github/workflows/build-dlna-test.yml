@@ -17,6 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set build identity
+        run: |
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "Build commit: ${GITHUB_SHA::7}"
+
       - name: Set up JDK
         uses: actions/setup-java@v6
         with:
@@ -71,6 +76,14 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
+      - name: Name debug APK
+        run: |
+          APK="$APK_PATH"
+          test -f "$APK" || { echo "Debug APK not found at $APK"; exit 1; }
+          mkdir -p dist
+          cp "$APK" "dist/NekoVideo-debug-${SHORT_SHA}.apk"
+          echo "APK_PATH=dist/NekoVideo-debug-${SHORT_SHA}.apk" >> "$GITHUB_ENV"
+
       - name: Verify built APK signing certificate
         env:
           EXPECTED_DEBUG_CERT_SHA256: "66:57:6A:B7:A6:D0:FD:BB:9D:A0:B4:13:A0:38:9E:29:4C:B8:65:D5:1D:0C:7C:27:8B:C7:02:84:29:01:7D:E5"
@@ -99,6 +112,6 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: NekoVideo-dlna-samsung-test
-          path: app/build/outputs/apk/debug/*.apk
+          name: NekoVideo-debug-${{ env.SHORT_SHA }}
+          path: ${{ env.APK_PATH }}
           if-no-files-found: error
