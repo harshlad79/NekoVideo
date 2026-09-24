@@ -91,6 +91,11 @@
     <string name="select_cast_device">Select cast device</string>
     <string name="cast_playing_on">Playing on</string>
     <string name="cast_waiting_for_tv">Waiting for the TV…</string>
+    <string name="cast_tv_slow_response">The TV is taking longer than usual to respond.</string>
+    <string name="cast_tv_analyzing_video">The TV is still analyzing this video.</string>
+    <string name="cast_slow_prompt">Keep waiting, stop this attempt, or skip to the next video.</string>
+    <string name="cast_keep_waiting">Keep waiting</string>
+    <string name="cast_stop_attempt">Stop</string>
     <string name="cast_browse_hint">Choose a video and position, then press Play.</string>
     <string name="cast_retry_hint">Playback was not confirmed. Press Play to retry.</string>
     <string name="cast_disconnect_title">Stop casting?</string>
