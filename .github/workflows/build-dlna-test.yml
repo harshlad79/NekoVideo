@@ -78,8 +78,8 @@ jobs:
 
       - name: Name debug APK
         run: |
-          APK="$APK_PATH"
-          test -f "$APK" || { echo "Debug APK not found at $APK"; exit 1; }
+          APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)
+          test -n "$APK" || { echo "Debug APK not found"; exit 1; }
           mkdir -p dist
           cp "$APK" "dist/NekoVideo-debug-${SHORT_SHA}.apk"
           echo "APK_PATH=dist/NekoVideo-debug-${SHORT_SHA}.apk" >> "$GITHUB_ENV"
