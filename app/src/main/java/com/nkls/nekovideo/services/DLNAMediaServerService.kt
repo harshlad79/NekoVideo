@@ -214,7 +214,7 @@ class DLNAMediaServerService : Service() {
                     append("SERVER: Android UPnP/1.1 NekoVideo/1.0\r\n")
                 }
                 append("NT: " + target + "\r\n")
-                append("NTS: " + if (alive) "ssdp:alive" else "ssdp:byebye" + "\r\n")
+                append("NTS: " + (if (alive) "ssdp:alive" else "ssdp:byebye") + "\r\n")
                 append("USN: " + usn + "\r\n")
                 append("\r\n")
             }.toByteArray(Charsets.UTF_8)
