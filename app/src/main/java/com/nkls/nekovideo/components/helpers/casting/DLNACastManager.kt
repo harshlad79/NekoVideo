@@ -499,9 +499,19 @@ class DLNACastManager(private val context: Context) {
     private fun prepareServer(): Boolean {
         if (videoServer != null) return true
         return try {
-            LocalVideoServer(context, 8080).also {
-                it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-                videoServer = it
+            LocalVideoServer(context, 8080).also { server ->
+                server.onVideoRequest = {
+                    if (controlState == CastControlState.PREPARING) {
+                        val first = !preparingMediaRequestSeen
+                        preparingMediaRequestSeen = true
+                        if (first) {
+                            trace("CAST preparing media activity detected")
+                            notifyStateChangedAsync()
+                        }
+                    }
+                }
+                server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+                videoServer = server
                 Log.d(tag, "Local video server started on port 8080")
             }
             true
@@ -777,6 +787,8 @@ class DLNACastManager(private val context: Context) {
         stoppedByUser = false
         isPlaying = false
         isLoadingTrack = true
+        preparingStartedAtMs = System.currentTimeMillis()
+        preparingMediaRequestSeen = false
         controlState = CastControlState.PREPARING
 
         val queuedAtMs = System.currentTimeMillis()
@@ -1475,8 +1487,17 @@ class DLNACastManager(private val context: Context) {
                     return
                 }
 
+                if (!activeSeekInProgress ||
+                    sessionGeneration != latestRequestGeneration ||
+                    controlState != CastControlState.READY_PLAYING ||
+                    confirmedVideoUrl != expectedUrl) {
+                    trace("CAST active seek aborted before command generation=$sessionGeneration state=$controlState")
+                    return
+                }
+
                 val seekVersion = latestActiveSeekVersion
                 val target = desiredPositionMs
+                if (!activeSeekInProgress || seekVersion != latestActiveSeekVersion) return
                 trace("CAST active seek send version=$seekVersion target=${msToTimeString(target)}")
 
                 val result = sendSoapCommand(
@@ -1639,6 +1660,25 @@ class DLNACastManager(private val context: Context) {
         }
 
         return null
+    }
+
+    fun cancelPreparingPlayback() {
+        if (controlState != CastControlState.PREPARING) return
+        val generation = nextRequestGeneration()
+        activeSeekInProgress = false
+        nextActiveSeekVersion()
+        stoppedByUser = true
+        isPlaying = false
+        isLoadingTrack = false
+        controlState = CastControlState.BROWSING
+        trace("CAST preparing cancelled generation=$generation")
+        notifyStateChangedAsync()
+
+        connectedDevice?.let { device ->
+            scope.launch {
+                sendSoapCommand(device.controlUrl, "Stop", "")
+            }
+        }
     }
 
     fun seekBy(deltaMs: Long) {
