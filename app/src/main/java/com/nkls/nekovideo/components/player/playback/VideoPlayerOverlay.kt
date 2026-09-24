@@ -184,6 +184,17 @@ fun VideoPlayerOverlay(
     var showCastDevicePicker by remember { mutableStateOf(false) }
     var discoveredDevices by remember { mutableStateOf<List<DLNACastManager.DLNADevice>>(emptyList()) }
     var isDiscovering by remember { mutableStateOf(false) }
+    var savedCastDevice by remember { mutableStateOf(castManager.getSavedDevice()) }
+
+    fun mergeDiscoveredDevices(incoming: List<DLNACastManager.DLNADevice>) {
+        val merged = discoveredDevices.toMutableList()
+        incoming.forEach { device ->
+            if (merged.none { it.controlUrl == device.controlUrl || it.baseUrl == device.baseUrl }) {
+                merged += device
+            }
+        }
+        discoveredDevices = merged
+    }
 
     // ✅ Observar estado de PIP da MainActivity (usando State para reatividade)
     val mainActivity = activity as? MainActivity
@@ -1527,6 +1538,27 @@ fun VideoPlayerOverlay(
         DLNADevicePickerDialog(
             devices = discoveredDevices,
             isDiscovering = isDiscovering,
+            savedDevice = savedCastDevice,
+            onDiscoveryToggle = {
+                if (isDiscovering) {
+                    castManager.stopDiscovery()
+                    isDiscovering = false
+                } else {
+                    isDiscovering = true
+                    castManager.onDevicesFound = { devices ->
+                        mergeDiscoveredDevices(devices)
+                    }
+                    castManager.onDiscoveryFinished = {
+                        isDiscovering = false
+                    }
+                    castManager.discoverDevices()
+                }
+            },
+            onForgetDevice = { device ->
+                if (castManager.forgetSavedDevice(device)) {
+                    savedCastDevice = null
+                }
+            },
             onDeviceSelected = { device ->
                 showCastDevicePicker = false
                 shouldResumeAfterOverlayDialog = false
@@ -1549,6 +1581,8 @@ fun VideoPlayerOverlay(
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             },
             onDismiss = {
+                castManager.stopDiscovery()
+                isDiscovering = false
                 showCastDevicePicker = false
                 resumePlaybackAfterOverlayDialog()
             }
@@ -1877,10 +1911,11 @@ fun VideoPlayerOverlay(
                                 mediaController?.pause()
                             }
                             discoveredDevices = emptyList()
+                            savedCastDevice = castManager.getSavedDevice()
                             isDiscovering = true
                             showCastDevicePicker = true
                             castManager.onDevicesFound = { devices ->
-                                discoveredDevices = devices
+                                mergeDiscoveredDevices(devices)
                             }
                             castManager.onDiscoveryFinished = {
                                 isDiscovering = false
