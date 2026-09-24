@@ -7,6 +7,14 @@ plugins {
     kotlin("kapt")
 }
 
+val gitShortSha = providers.environmentVariable("GITHUB_SHA").orNull
+    ?.take(7)
+    ?: runCatching {
+        providers.exec {
+            commandLine("git", "rev-parse", "--short=7", "HEAD")
+        }.standardOutput.asText.get().trim()
+    }.getOrDefault("unknown")
+
 android {
     namespace = "com.nkls.nekovideo"
     compileSdk = 36
@@ -17,6 +25,7 @@ android {
         targetSdk = 36
         versionCode = 40
         versionName = "1.5.0"
+        buildConfigField("String", "GIT_SHA", "\"$gitShortSha\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
