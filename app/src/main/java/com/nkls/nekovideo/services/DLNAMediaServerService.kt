@@ -48,6 +48,11 @@ class DLNAMediaServerService : Service() {
     private var multicastLock: WifiManager.MulticastLock? = null
     private lateinit var uuid: String
 
+    private fun trace(message: String) {
+        Log.d(TAG, message)
+        DebugTraceLogger.log(this, "MEDIA_SERVER " + message)
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -62,6 +67,7 @@ class DLNAMediaServerService : Service() {
                     .apply()
             }
 
+        trace("service created enabled=" + isEnabled(this))
         startMediaServer()
     }
 
@@ -79,12 +85,13 @@ class DLNAMediaServerService : Service() {
     private fun startMediaServer() {
         if (httpServer == null) {
             try {
-                httpServer = MediaServerHttpServer(HTTP_PORT, uuid).also {
+                httpServer = MediaServerHttpServer(HTTP_PORT, uuid) { trace(it) }.also {
                     it.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
                 }
-                Log.d(TAG, "HTTP MediaServer started port=" + HTTP_PORT)
+                trace("HTTP started port=" + HTTP_PORT)
             } catch (e: Exception) {
                 Log.e(TAG, "Unable to start HTTP MediaServer", e)
+                trace("HTTP start failed " + e.javaClass.simpleName + ": " + e.message)
                 httpServer?.stop()
                 httpServer = null
                 stopSelf()
@@ -124,8 +131,14 @@ class DLNAMediaServerService : Service() {
                 }
             }
 
+            trace(
+                "SSDP listening iface=" + (iface?.name ?: "default") +
+                    " local=" + (preferredIpv4Address()?.hostAddress ?: "unknown")
+            )
             sendAllAdvertisements(socket, alive = true)
-            delay(150)
+            delay(250)
+            sendAllAdvertisements(socket, alive = true)
+            delay(750)
             sendAllAdvertisements(socket, alive = true)
 
             var nextAliveAt = System.currentTimeMillis() + ALIVE_REFRESH_MS
@@ -144,6 +157,15 @@ class DLNAMediaServerService : Service() {
                     if (message.startsWith("M-SEARCH", ignoreCase = true) &&
                         message.contains("ssdp:discover", ignoreCase = true)
                     ) {
+                        val requestedSt = message.lineSequence()
+                            .firstOrNull { it.startsWith("ST:", ignoreCase = true) }
+                            ?.substringAfter(":")
+                            ?.trim()
+                            ?: "<missing>"
+                        trace(
+                            "M-SEARCH from=" + packet.address.hostAddress + ":" + packet.port +
+                                " st=" + requestedSt
+                        )
                         respondToSearch(socket, packet, message)
                     }
                 } catch (_: java.net.SocketTimeoutException) {
@@ -153,6 +175,7 @@ class DLNAMediaServerService : Service() {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "SSDP server stopped by error", e)
+            trace("SSDP error " + e.javaClass.simpleName + ": " + e.message)
         } finally {
             socket?.let {
                 runCatching { sendAllAdvertisements(it, alive = false) }
@@ -180,7 +203,7 @@ class DLNAMediaServerService : Service() {
                 append("CACHE-CONTROL: max-age=" + MAX_AGE_SECONDS + "\r\n")
                 append("EXT:\r\n")
                 append("LOCATION: " + location + "\r\n")
-                append("SERVER: Android UPnP/1.1 NekoVideo/1.0\r\n")
+                append("SERVER: Android UPnP/1.0 NekoVideo/1.0\r\n")
                 append("ST: " + target + "\r\n")
                 append("USN: " + usn + "\r\n")
                 append("\r\n")
@@ -194,6 +217,10 @@ class DLNAMediaServerService : Service() {
                         request.address,
                         request.port
                     )
+                )
+                trace(
+                    "M-SEARCH response st=" + target +
+                        " to=" + request.address.hostAddress + ":" + request.port
                 )
             }.onFailure {
                 Log.w(TAG, "M-SEARCH response failed: " + it.message)
@@ -211,7 +238,7 @@ class DLNAMediaServerService : Service() {
                 if (alive) {
                     append("CACHE-CONTROL: max-age=" + MAX_AGE_SECONDS + "\r\n")
                     if (location != null) append("LOCATION: " + location + "\r\n")
-                    append("SERVER: Android UPnP/1.1 NekoVideo/1.0\r\n")
+                    append("SERVER: Android UPnP/1.0 NekoVideo/1.0\r\n")
                 }
                 append("NT: " + target + "\r\n")
                 append("NTS: " + (if (alive) "ssdp:alive" else "ssdp:byebye") + "\r\n")
@@ -223,7 +250,10 @@ class DLNAMediaServerService : Service() {
                 socket.send(DatagramPacket(packetText, packetText.size, group, SSDP_PORT))
             }
         }
-        Log.d(TAG, "SSDP " + if (alive) "alive" else "byebye")
+        trace(
+            "SSDP " + (if (alive) "alive" else "byebye") +
+                " location=" + (location ?: "<none>")
+        )
     }
 
     private fun advertisementTargets(): List<Pair<String, String>> {
@@ -332,7 +362,7 @@ class DLNAMediaServerService : Service() {
         private const val SSDP_PORT = 1900
         private const val SSDP_HOST = "239.255.255.250"
         private const val MAX_AGE_SECONDS = 1800
-        private const val ALIVE_REFRESH_MS = 15L * 60L * 1000L
+        private const val ALIVE_REFRESH_MS = 60L * 1000L
 
         private const val MEDIA_SERVER_TYPE = "urn:schemas-upnp-org:device:MediaServer:1"
         private const val CONTENT_DIRECTORY_TYPE = "urn:schemas-upnp-org:service:ContentDirectory:1"
@@ -371,7 +401,8 @@ class DLNAMediaServerService : Service() {
 
 private class MediaServerHttpServer(
     port: Int,
-    private val uuid: String
+    private val uuid: String,
+    private val trace: (String) -> Unit
 ) : NanoHTTPD(port) {
 
     private val root = File("/storage/emulated/0")
@@ -380,6 +411,7 @@ private class MediaServerHttpServer(
     )
 
     override fun serve(session: IHTTPSession): Response {
+        trace("HTTP " + session.method + " " + session.uri)
         return try {
             when {
                 session.method == Method.GET && session.uri == "/device.xml" ->
@@ -419,6 +451,10 @@ private class MediaServerHttpServer(
     private fun serveContentDirectory(session: IHTTPSession): Response {
         val request = readPostBody(session)
         val action = soapAction(session)
+        trace(
+            "ContentDirectory action=" + action +
+                " objectId=" + (extractTag(request, "ObjectID") ?: "<none>")
+        )
 
         return when (action) {
             "Browse" -> {
@@ -768,14 +804,25 @@ private class MediaServerHttpServer(
 
     private fun deviceDescription(): String =
         "<?xml version=\"1.0\"?>" +
-            "<root xmlns=\"urn:schemas-upnp-org:device-1-0\">" +
+            "<root xmlns=\"urn:schemas-upnp-org:device-1-0\"" +
+            " xmlns:dlna=\"urn:schemas-dlna-org:device-1-0\"" +
+            " xmlns:sec=\"http://www.sec.co.kr/dlna\">" +
             "<specVersion><major>1</major><minor>0</minor></specVersion>" +
             "<device>" +
             "<deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>" +
             "<friendlyName>NekoVideo</friendlyName>" +
             "<manufacturer>NekoVideo</manufacturer>" +
-            "<modelName>NekoVideo DLNA Media Server</modelName>" +
+            "<manufacturerURL>https://github.com/harshlad79/NekoVideo</manufacturerURL>" +
+            "<modelDescription>NekoVideo DLNA Media Server</modelDescription>" +
+            "<modelName>NekoVideo</modelName>" +
+            "<modelNumber>1.0</modelNumber>" +
+            "<serialNumber>" + escapeXml(uuid.take(12)) + "</serialNumber>" +
             "<UDN>uuid:" + escapeXml(uuid) + "</UDN>" +
+            "<dlna:X_DLNACAP/>" +
+            "<dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>" +
+            "<dlna:X_DLNADOC>M-DMS-1.50</dlna:X_DLNADOC>" +
+            "<sec:ProductCap>smi,DCM10,getMediaInfo.sec,getCaptionInfo.sec</sec:ProductCap>" +
+            "<sec:X_ProductCap>smi,DCM10,getMediaInfo.sec,getCaptionInfo.sec</sec:X_ProductCap>" +
             "<serviceList>" +
             "<service><serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>" +
             "<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>" +
