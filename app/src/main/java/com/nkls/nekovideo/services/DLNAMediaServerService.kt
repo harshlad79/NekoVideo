@@ -805,8 +805,7 @@ private class MediaServerHttpServer(
     private fun deviceDescription(): String =
         "<?xml version=\"1.0\"?>" +
             "<root xmlns=\"urn:schemas-upnp-org:device-1-0\"" +
-            " xmlns:dlna=\"urn:schemas-dlna-org:device-1-0\"" +
-            " xmlns:sec=\"http://www.sec.co.kr/dlna\">" +
+            " xmlns:dlna=\"urn:schemas-dlna-org:device-1-0\">" +
             "<specVersion><major>1</major><minor>0</minor></specVersion>" +
             "<device>" +
             "<deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>" +
@@ -821,8 +820,6 @@ private class MediaServerHttpServer(
             "<dlna:X_DLNACAP/>" +
             "<dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>" +
             "<dlna:X_DLNADOC>M-DMS-1.50</dlna:X_DLNADOC>" +
-            "<sec:ProductCap>smi,DCM10,getMediaInfo.sec,getCaptionInfo.sec</sec:ProductCap>" +
-            "<sec:X_ProductCap>smi,DCM10,getMediaInfo.sec,getCaptionInfo.sec</sec:X_ProductCap>" +
             "<serviceList>" +
             "<service><serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>" +
             "<serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>" +
