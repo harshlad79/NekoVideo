@@ -1881,6 +1881,8 @@ fun VideoPlayerOverlay(
                             showCastDevicePicker = true
                             castManager.onDevicesFound = { devices ->
                                 discoveredDevices = devices
+                            }
+                            castManager.onDiscoveryFinished = {
                                 isDiscovering = false
                             }
                             castManager.discoverDevices()
