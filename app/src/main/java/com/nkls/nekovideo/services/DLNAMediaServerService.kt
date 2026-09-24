@@ -131,7 +131,7 @@ class DLNAMediaServerService : Service() {
             var nextAliveAt = System.currentTimeMillis() + ALIVE_REFRESH_MS
             val buffer = ByteArray(8192)
 
-            while (isActive) {
+            while (kotlinx.coroutines.currentCoroutineContext().isActive) {
                 if (System.currentTimeMillis() >= nextAliveAt) {
                     sendAllAdvertisements(socket, alive = true)
                     nextAliveAt = System.currentTimeMillis() + ALIVE_REFRESH_MS
@@ -281,7 +281,7 @@ class DLNAMediaServerService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(R.drawable.ic_stat_player)
             .setContentTitle(getString(R.string.dlna_server_notification_title))
             .setContentText(getString(R.string.dlna_server_notification_text))
             .setContentIntent(openApp)
