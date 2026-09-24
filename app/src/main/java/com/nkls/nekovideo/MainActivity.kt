@@ -206,6 +206,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         DebugCrashLogger.install(this)
         super.onCreate(savedInstanceState)
+        DebugTraceLogger.startSession(this)
 
         themeManager = ThemeManager(this)
         LanguageManager.initialize()
