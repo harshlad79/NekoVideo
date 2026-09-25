@@ -305,21 +305,35 @@ class DLNACastManager(private val context: Context) {
                     }
                 }
 
-                fun searchPacket(mx: Int): ByteArray = buildString {
+                val mediaRendererTarget = "urn:schemas-upnp-org:device:MediaRenderer:1"
+                val avTransportTarget = "urn:schemas-upnp-org:service:AVTransport:1"
+
+                fun searchPacket(st: String, mx: Int): ByteArray = buildString {
                     append("M-SEARCH * HTTP/1.1\r\n")
                     append("HOST: 239.255.255.250:1900\r\n")
                     append("MAN: \"ssdp:discover\"\r\n")
                     append("MX: $mx\r\n")
-                    append("ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n")
+                    append("ST: $st\r\n\r\n")
                 }.toByteArray()
 
-                val fast = searchPacket(1)
+                val fast = searchPacket(mediaRendererTarget, 1)
                 socket!!.send(DatagramPacket(fast, fast.size, group, 1900))
-                trace("DISCOVERY M-SEARCH fast MX=1")
+                trace("DISCOVERY M-SEARCH fast MX=1 ST=MediaRenderer:1")
                 delay(180)
-                val fallback = searchPacket(3)
+
+                val fallback = searchPacket(mediaRendererTarget, 3)
                 socket!!.send(DatagramPacket(fallback, fallback.size, group, 1900))
-                trace("DISCOVERY M-SEARCH fallback MX=3")
+                trace("DISCOVERY M-SEARCH fallback MX=3 ST=MediaRenderer:1")
+                delay(180)
+
+                val allDiagnostic = searchPacket("ssdp:all", 2)
+                socket!!.send(DatagramPacket(allDiagnostic, allDiagnostic.size, group, 1900))
+                trace("DISCOVERY diagnostic M-SEARCH MX=2 ST=ssdp:all")
+                delay(180)
+
+                val avTransportDiagnostic = searchPacket(avTransportTarget, 2)
+                socket!!.send(DatagramPacket(avTransportDiagnostic, avTransportDiagnostic.size, group, 1900))
+                trace("DISCOVERY diagnostic M-SEARCH MX=2 ST=AVTransport:1")
 
                 coroutineScope {
                     val descriptionJobs = mutableListOf<Job>()
@@ -334,10 +348,16 @@ class DLNACastManager(private val context: Context) {
                             packetCount++
                             val response = String(pkt.data, 0, pkt.length)
                             val location = extractHeader(response, "LOCATION") ?: continue
+                            val responseSt = extractHeader(response, "ST") ?: "<missing>"
+                            val responseUsn = extractHeader(response, "USN") ?: "<missing>"
                             trace(
                                 "DISCOVERY packet source=${pkt.address?.hostAddress ?: "unknown"} " +
-                                    "location=$location"
+                                    "st=$responseSt usn=$responseUsn location=$location"
                             )
+
+                            // Broad searches are diagnostics only; keep the picker limited to MediaRenderer.
+                            if (!responseSt.equals(mediaRendererTarget, ignoreCase = true)) continue
+
                             if (!seenLocations.add(location)) continue
                             descriptionJobs += launch(Dispatchers.IO) {
                                 val device = fetchDeviceDescription(location)
