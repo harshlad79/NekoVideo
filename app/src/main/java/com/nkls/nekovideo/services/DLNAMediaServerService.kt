@@ -853,7 +853,7 @@ private class MediaServerHttpServer(
                 arg("Result", "out", "A_ARG_TYPE_Result"),
                 arg("NumberReturned", "out", "A_ARG_TYPE_Count"),
                 arg("TotalMatches", "out", "A_ARG_TYPE_Count"),
-                arg("UpdateID", "out", "SystemUpdateID")
+                arg("UpdateID", "out", "A_ARG_TYPE_UpdateID")
             )) +
             actionXml("GetSearchCapabilities", listOf(arg("SearchCaps", "out", "SearchCapabilities"))) +
             actionXml("GetSortCapabilities", listOf(arg("SortCaps", "out", "SortCapabilities"))) +
@@ -861,10 +861,11 @@ private class MediaServerHttpServer(
             "</actionList>" +
             "<serviceStateTable>" +
             stateXml("A_ARG_TYPE_ObjectID", "string") +
-            stateXml("A_ARG_TYPE_BrowseFlag", "string") +
+            stateXml("A_ARG_TYPE_BrowseFlag", "string", allowedValues = listOf("BrowseMetadata", "BrowseDirectChildren")) +
             stateXml("A_ARG_TYPE_Filter", "string") +
             stateXml("A_ARG_TYPE_Index", "ui4") +
             stateXml("A_ARG_TYPE_Count", "ui4") +
+            stateXml("A_ARG_TYPE_UpdateID", "ui4") +
             stateXml("A_ARG_TYPE_SortCriteria", "string") +
             stateXml("A_ARG_TYPE_Result", "string") +
             stateXml("SearchCapabilities", "string") +
@@ -915,9 +916,21 @@ private class MediaServerHttpServer(
         "<argument><name>" + name + "</name><direction>" + direction +
             "</direction><relatedStateVariable>" + related + "</relatedStateVariable></argument>"
 
-    private fun stateXml(name: String, type: String, sendEvents: Boolean = false): String =
+    private fun stateXml(
+        name: String,
+        type: String,
+        sendEvents: Boolean = false,
+        allowedValues: List<String> = emptyList()
+    ): String =
         "<stateVariable sendEvents=\"" + if (sendEvents) "yes" else "no" + "\"><name>" +
-            name + "</name><dataType>" + type + "</dataType></stateVariable>"
+            name + "</name><dataType>" + type + "</dataType>" +
+            if (allowedValues.isEmpty()) {
+                "</stateVariable>"
+            } else {
+                "<allowedValueList>" +
+                    allowedValues.joinToString("") { "<allowedValue>" + escapeXml(it) + "</allowedValue>" } +
+                    "</allowedValueList></stateVariable>"
+            }
 
     private fun localIpv4Address(): String? {
         return runCatching {
