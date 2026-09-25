@@ -67,7 +67,10 @@ class DLNAMediaServerService : Service() {
                     .apply()
             }
 
-        trace("service created enabled=" + isEnabled(this))
+        trace(
+            "service created enabled=" + isEnabled(this) +
+                " udn=uuid:" + uuid
+        )
         startMediaServer()
     }
 
@@ -411,7 +414,8 @@ private class MediaServerHttpServer(
     )
 
     override fun serve(session: IHTTPSession): Response {
-        trace("HTTP " + session.method + " " + session.uri)
+        val remoteIp = session.remoteIpAddress ?: "<unknown>"
+        trace("HTTP " + session.method + " " + session.uri + " from=" + remoteIp)
         return try {
             when {
                 session.method == Method.GET && session.uri == "/device.xml" ->
@@ -453,7 +457,8 @@ private class MediaServerHttpServer(
         val action = soapAction(session)
         trace(
             "ContentDirectory action=" + action +
-                " objectId=" + (extractTag(request, "ObjectID") ?: "<none>")
+                " objectId=" + (extractTag(request, "ObjectID") ?: "<none>") +
+                " from=" + (session.remoteIpAddress ?: "<unknown>")
         )
 
         return when (action) {
